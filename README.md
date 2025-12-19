@@ -12,9 +12,19 @@ uv sync
 ```
 cp sample.env .env
 ```
-Add your Google API key to the .env file
+Add your Google/OpenAI API key to the .env file
 
-4. Run the [debate example](#example)
+4. Run the steps missed by the original tutorial
+```
+uv pip install "tau2 @ git+https://github.com/sierra-research/tau2-bench.git" --break-system-packages
+git clone --depth 1 --filter=blob:none --sparse https://github.com/sierra-research/tau2-bench.git ~/tau2-bench
+cd ~/tau2-bench
+git sparse-checkout set data
+export TAU2_DATA_DIR=~/tau2-bench/data
+```
+5. Run the [tau2 example](#example)
+
+Return to the tutorial repository and run
 ```
 uv run agentbeats-run scenarios/debate/scenario.toml
 ```
