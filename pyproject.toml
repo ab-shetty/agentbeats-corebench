@@ -12,10 +12,12 @@ dependencies = [
     "a2a-sdk>=0.3.5",
     "google-adk>=1.14.1",
     "google-genai>=1.36.0",
+    "gymnasium>=1.2.3",
     "litellm>=1.0.0",
     "loguru>=0.7.0",
     "pydantic>=2.11.9",
     "python-dotenv>=1.1.1",
+    "tau2 @ git+https://github.com/sierra-research/tau2-bench.git",
     "uvicorn>=0.35.0",
 ]
 
@@ -24,9 +26,14 @@ agentbeats-run = "agentbeats.run_scenario:main"
 
 [tool.uv]
 package = true
-dev-dependencies = [
+
+[dependency-groups]
+dev = [
     "mypy>=1.18.1",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentbeats"]
