@@ -1,7 +1,7 @@
 ## Quickstart
 1. Clone the repo
 ```
-git clone git@github.com:agentbeats/tutorial.git agentbeats-tutorial
+git clone git@github.com:ab-shetty/agentbeats-corebench.git agentbeats-tutorial
 cd agentbeats-tutorial
 ```
 2. Install dependencies
@@ -12,11 +12,10 @@ uv sync
 ```
 cp sample.env .env
 ```
-Add your Google/OpenAI API key to the .env file
+Add your Google/OpenAI API keys to the .env file
 
-4. Run the steps missed by the original tutorial
+4. Bring the tau2 data into your environment.
 ```
-uv pip install "tau2 @ git+https://github.com/sierra-research/tau2-bench.git" --break-system-packages
 git clone --depth 1 --filter=blob:none --sparse https://github.com/sierra-research/tau2-bench.git ~/tau2-bench
 cd ~/tau2-bench
 git sparse-checkout set data
@@ -26,7 +25,7 @@ export TAU2_DATA_DIR=~/tau2-bench/data
 
 Return to the tutorial repository and run
 ```
-uv run agentbeats-run scenarios/tau2/scenario.toml
+uv run agentbeats-run scenarios/tau2/scenario.toml --show-logs
 ```
 This command will:
 - Start the agent servers using the commands specified in scenario.toml
