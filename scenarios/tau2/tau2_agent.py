@@ -96,8 +96,8 @@ class Tau2AgentExecutor(AgentExecutor):
         try:
             response = completion(
                 messages=messages,
-                model="openai/gpt-4o",
-                temperature=0.0,
+                model="openai/gpt-5-mini",
+                # temperature=0.0,
             )
             assistant_content = response.choices[0].message.content
             logger.info(f"LLM response: {assistant_content[:200]}...")

@@ -101,8 +101,8 @@ class Tau2Evaluator(GreenAgent):
         task_ids = req.config.get("task_ids", None)
         num_tasks = req.config.get("num_tasks", None)
         max_steps = req.config.get("max_steps", 200)
-        user_llm = req.config.get("user_llm", "openai/gpt-4o")
-        user_llm_args = req.config.get("user_llm_args", {"temperature": 0.0})
+        user_llm = req.config.get("user_llm", "openai/gpt-5-mini")
+        user_llm_args = req.config.get("user_llm_args", {})
 
         # Get the purple agent URL
         agent_url = str(req.participants["agent"])
