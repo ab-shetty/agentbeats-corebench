@@ -40,6 +40,20 @@ After running, you should see an output similar to this.
 
 ![Sample output](assets/sample_output.png)
 
+6. To test the MCP server functionality using an interactive, web-based MCP inspector, navigate to scenarios/corebench and run
+```
+uv run mcp dev mcp_server.py
+```
+
+7. Click Connect > Tools > List Tools > Tool to be tested
+
+![alt text](image.png)
+
+8. Alternatively, a python test harness can be run which will start the MCP server and communicate via JSON-RPC
+```
+uv run python test_mcp_tools_jsonrpc_full.py
+```
+
 ## Project Structure
 ```
 src/
@@ -57,6 +71,40 @@ scenarios/
    ├─ debate_judge_common.py   # models and utils shared by above impls
    ├─ debater.py               # debater agent (Google ADK)
    └─ scenario.toml            # config for the debate example
+```
+
+# Architectural Diagram
+```mermaid
+sequenceDiagram
+    participant Green as Green Agent
+    participant Purple as Purple Agent
+    participant MCP as MCP Server
+
+    Note over Green: 1. INITIALIZATION<br/>Load tasks.json<br/>Start MCP server
+
+    loop For each task
+        Note over Green: 2. TASK SETUP<br/>git clone repo → /code
+
+        Green->>Purple: 3. Send task via A2A<br/>{task_id, description,<br/>mcp_server_url, tools}
+
+        Note over Purple: 4. WORK ON TASK
+        Purple->>MCP: read_file("/code/README.md")
+        MCP-->>Purple: file contents
+        Purple->>MCP: execute_bash("pip install...")
+        MCP-->>Purple: stdout/stderr
+        Purple->>MCP: execute_bash("python run.py")
+        MCP-->>Purple: stdout output.csv
+        Purple->>MCP: read_file("/results/output.csv")
+        MCP-->>Purple: results data
+
+        Purple->>Green: 5. Send completion via A2A<br/>{final_answer}
+
+        Note over Green: 6. EVALUATE RESULTS<br/>Read final_answer<br/>Compare with ground truth<br/>Calculate metrics
+
+        Note over Green: 7. CLEANUP & NEXT<br/>Delete /code <br/>Reset MCP state (if needed)<br/>Load next task
+    end
+
+    Note over Green: All tasks completed
 ```
 
 # AgentBeats Tutorial
