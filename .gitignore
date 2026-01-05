@@ -4,3 +4,12 @@
 .venv/
 __pycache__/
 *.pyc
+scenarios/corebench/test_mcp_tools_client.py
+scenarios/corebench/test_mcp_tools_jsonrpc.py
+scenarios/corebench/test_mcp_tools_patterns.py
+scenarios/corebench/test_mcp_tools_production_pattern.py
+scenarios/corebench/test_mcp_tools_production_pattern_fix.py
+scenarios/corebench/test_mcp_tools_server.py
+scenarios/corebench/test_mcp_tools_simple.py
+scenarios/corebench/test_mcp_tools.py
+/scenarios/corebench/capsules
