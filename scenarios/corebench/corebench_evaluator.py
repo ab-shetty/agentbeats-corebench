@@ -373,7 +373,7 @@ class CoreBenchEvaluator(GreenAgent):
         logger.info(f"Starting corebench evaluation: {req}")
         start_time = time.time()
 
-        domain = req.config["domain"]
+        domain = req.config["domain"] # corebench_easy, corebench_medium or corebench_hard
         task_ids = req.config.get("task_ids", None)
         num_tasks = req.config.get("num_tasks", None)
         max_steps = req.config.get("max_steps", 200)
@@ -509,7 +509,7 @@ Task Results:
         
         # Build the initial task description for the purple agent
         print("Building task...")
-        task_description = self._build_task_prompt(task, use_mcp)
+        task_description = self._build_task_prompt(task, domain, use_mcp)
 
         # Start a new conversation with the purple agent
         next_message = task_description
@@ -753,7 +753,7 @@ Task Results:
             "failed_tasks": failed_tasks
         }
 
-    def _build_task_prompt(self, task: dict, use_mcp: bool = True) -> str:
+    def _build_task_prompt(self, task: dict, domain: str, use_mcp: bool = True) -> str:
         """Build the initial task prompt for the purple agent."""
 
         observation = str(task["results"][0].keys())
@@ -764,10 +764,28 @@ Task Results:
             tools_str = mcp_tools_to_str(self._mcp_tools)
             tools_section = f"""Here's a list of MCP tools you can use (you can use at most one tool at a time):
 {tools_str}"""
-
         
+        # Add instruction prompt by difficulty level
+        logger.info(f"observation: {observation}")
+        task_prompt = task["task_prompt"]
+        logger.info(f"task_prompt: {task_prompt}")
+
+        if domain == "corebench_easy":    
+            instruction_prompt = f"Task: codeocean_easy\n\nYour goal is to answer questions about the output of scientific code. You should read through the files in the `environment/results` directory to answer the following questions: {observation}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. **You should not actually run or execute any code.** All answers can be obtained by reading through the results directory."
+            logger.info(f"instruction_prompt: {instruction_prompt}")
+        elif domain == "corebench_medium":
+            instruction_prompt = f"Task: codeocean_medium\n\nYour goal is to test the computational reproducibility of the repository cloned to your current directory, which is code from a scientific paper. Specifically, you need to {task_prompt} to answer the following questions: {observation}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. You should read the instructions on how to reproduce the capsule in REPRODUCING.md."
+            logger.info(f"instruction_prompt: {instruction_prompt}")    
+        elif domain == "corebench_hard":            
+            instruction_prompt = f"Task: codeocean_hard\n\nYour goal is to test the computational reproducibility of the repository cloned to your current directory, which is code from a scientific paper. Specifically, you need to {task_prompt} to answer the following questions: {observation}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. You should install all of the requirements found in the Readme file and then run the commands necessary to answer the questions."
+            logger.info(f"instruction_prompt: {instruction_prompt}")
+        else:
+            raise ValueError(f"Unknown domain: {domain}")
+
         return f"""
 
+{instruction_prompt}
+\n\n
 {tools_section}
 
 Please respond in JSON format. Wrap the JSON with <json>...</json> tags.
