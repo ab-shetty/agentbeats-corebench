@@ -197,7 +197,7 @@ def mcp_tools_to_str(mcp_tools: list) -> str:
 
 def download_corebench_capsule(
     capsule_id: str,
-    target_dir: str = "./capsules"
+    target_dir: str = "./scenarios/corebench/capsules"
 ) -> str:
     """
     Download and extract a CoreBench capsule from the repository.
@@ -266,6 +266,57 @@ def download_corebench_capsule(
     except Exception as e:
         return f"Error downloading capsule {capsule_id}: {str(e)}"
         
+def delete_corebench_capsule(
+    capsule_id: str,
+    capsules_dir: str = "./scenarios/corebench"
+) -> str:
+    """
+    Delete a CoreBench capsule directory and clean up any associated files.
+    Use this tool to remove a capsule that's no longer needed.
+    
+    Args:
+        capsule_id: The ID of the capsule to delete (e.g., "1234567")
+        capsules_dir: Directory where capsules are stored (default: "./capsules")
+    
+    Returns:
+        Success message or error message
+    """
+    import shutil
+    from pathlib import Path
+    
+    try:
+        capsules_base = Path(capsules_dir)
+        capsule_dir = capsules_base / capsule_id
+        tar_path = capsules_base / f"{capsule_id}.tar.gz"
+        
+        # Check if capsule directory exists
+        if not capsule_dir.exists():
+            # Check if tar file exists
+            if tar_path.exists():
+                tar_path.unlink()
+                return f"Deleted incomplete download: {tar_path}"
+            return f"Capsule {capsule_id} not found in {capsules_dir}"
+        
+        # Confirm it's actually a directory
+        if not capsule_dir.is_dir():
+            return f"Error: {capsule_dir} exists but is not a directory"
+        
+        # Delete the capsule directory
+        print(f"Deleting capsule {capsule_id}...")
+        shutil.rmtree(capsule_dir)
+        
+        # Also delete tar file if it exists
+        if tar_path.exists():
+            tar_path.unlink()
+            return f"Successfully deleted capsule {capsule_id} and its archive from {capsules_dir}"
+        
+        return f"Successfully deleted capsule {capsule_id} from {capsules_dir}"
+        
+    except PermissionError as e:
+        return f"Permission denied when deleting capsule {capsule_id}: {str(e)}"
+    except Exception as e:
+        return f"Error deleting capsule {capsule_id}: {str(e)}"
+
 def get_tasks(task_set_name):
 
     core_test_path = os.path.join(os.path.dirname(__file__), "core_test.json")
@@ -278,6 +329,8 @@ def get_tasks(task_set_name):
         
     with open(core_test_path, 'r') as f:
         dataset = json.load(f)
+
+    os.remove(core_test_path)
 
     return dataset
 
@@ -421,7 +474,6 @@ class CoreBenchEvaluator(GreenAgent):
                     TaskState.working,
                     new_agent_text_message(f"Running task {task_id}...")
                 )
-
                 try:
                     reward = await self._run_single_task(
                         agent_url=agent_url,
@@ -509,6 +561,7 @@ Task Results:
         
         # Build the initial task description for the purple agent
         print("Building task...")
+        download_corebench_capsule(task_id)
         task_description = self._build_task_prompt(task, use_mcp)
 
         # Start a new conversation with the purple agent
@@ -516,7 +569,7 @@ Task Results:
         is_first_message = True
 
         while not terminated:
-            logger.debug(f"Sending to purple agent: {next_message[:200]}...")
+            logger.debug(f"Sending to purple agent: {next_message[:300]}...")
 
             # Send message to purple agent
             response = await self._tool_provider.talk_to_agent(
@@ -526,7 +579,7 @@ Task Results:
             )
             is_first_message = False
 
-            logger.debug(f"Purple agent response: {response[:200]}...")
+            logger.debug(f"Purple agent response: {response[:300]}...")
 
             # Parse the purple agent's action and execute tools if needed
             try:
@@ -535,7 +588,7 @@ Task Results:
                 # If we executed a tool via MCP, send the result back to the agent
                 # and continue the loop without stepping the environment yet
                 if tool_result is not None:
-                    logger.info(f"Tool executed via MCP, result: {tool_result[:200]}...")
+                    logger.info(f"Tool executed via MCP, result: {tool_result[:300]}...")
                     next_message = f"Tool execution result:\n{tool_result}\n\nPlease continue with your task."
                     continue
                 
@@ -554,7 +607,7 @@ Task Results:
 
             break
 
-
+        delete_corebench_capsule(task_id)
         gt_result = task["results"]
 
         # Calculate total questions from ground truth (regardless of parsing success)
