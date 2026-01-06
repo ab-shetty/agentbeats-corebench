@@ -14,6 +14,6 @@ RUN \
 
 COPY scenarios scenarios
 
-ENTRYPOINT ["uv", "run", "scenarios/tau2/tau2_agent.py"]
+ENTRYPOINT ["uv", "run", "scenarios/corebench/corebench_agent.py"]
 CMD ["--host", "0.0.0.0"]
 EXPOSE 9019

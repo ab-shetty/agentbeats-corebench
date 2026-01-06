@@ -25,7 +25,7 @@ export TAU2_DATA_DIR=~/tau2-bench/data
 
 Return to the tutorial repository and run
 ```
-uv run agentbeats-run scenarios/tau2/scenario.toml --show-logs
+uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
 ```
 This command will:
 - Start the agent servers using the commands specified in scenario.toml
