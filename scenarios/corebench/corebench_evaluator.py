@@ -15,7 +15,7 @@ import json
 import logging
 import subprocess
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 import os
 
 import numpy as np
