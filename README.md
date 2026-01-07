@@ -1,8 +1,8 @@
 ## Quickstart
 1. Clone the repo
 ```
-git clone git@github.com:ab-shetty/agentbeats-corebench.git agentbeats-tutorial
-cd agentbeats-tutorial
+git clone git@github.com:ab-shetty/agentbeats-corebench.git 
+cd agentbeats-corebench
 ```
 2. Install dependencies
 ```
