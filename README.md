@@ -12,65 +12,37 @@ uv sync
 ```
 cp sample.env .env
 ```
-Add your Google/OpenAI API keys to the .env file
+Add your Google/OpenAI/nebius API keys to the .env file
 
-4. Bring the tau2 data into your environment.
 ```
-git clone --depth 1 --filter=blob:none --sparse https://github.com/sierra-research/tau2-bench.git ~/tau2-bench
-cd ~/tau2-bench
-git sparse-checkout set data
-export TAU2_DATA_DIR=~/tau2-bench/data
-```
-5. Run the [tau2 example](#example)
+4. Run the [corebench example](#example)
 
 Return to the tutorial repository and run
 ```
 uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
 ```
-This command will:
-- Start the agent servers using the commands specified in scenario.toml
-- Construct an `assessment_request` message containing the participant's role-endpoint mapping and the assessment config
-- Send the `assessment_request` to the green agent and print streamed responses
-
 **Note:** Use `--show-logs` to see agent outputs during the assessment, and `--serve-only` to start agents without running the assessment.
 
 To run this example manually, start the agent servers in separate terminals, and then in another terminal run the A2A client on the scenario.toml file to initiate the assessment.
 
-After running, you should see an output similar to this.
 
-![Sample output](assets/sample_output.png)
-
-6. To test the MCP server functionality using an interactive, web-based MCP inspector, navigate to scenarios/corebench and run
+5. To test the MCP server functionality using an interactive, web-based MCP inspector, navigate to scenarios/corebench and run
 ```
 uv run mcp dev mcp_server.py
 ```
 
-7. Click Connect > Tools > List Tools > Tool to be tested
+6. Click Connect > Tools > List Tools > Tool to be tested
 
 ![alt text](image.png)
 
-8. Alternatively, a python test harness can be run which will start the MCP server and communicate via JSON-RPC
+7. Alternatively, a python test harness can be run which will start the MCP server and communicate via JSON-RPC
 ```
 uv run python test_mcp_tools_jsonrpc_full.py
 ```
 
 ## Project Structure
 ```
-src/
-└─ agentbeats/
-   ├─ green_executor.py        # base A2A green agent executor
-   ├─ models.py                # pydantic models for green agent IO
-   ├─ client.py                # A2A messaging helpers
-   ├─ client_cli.py            # CLI client to start assessment
-   └─ run_scenario.py          # run agents and start assessment
-
-scenarios/
-└─ debate/                     # implementation of the debate example
-   ├─ debate_judge.py          # green agent impl using the official A2A SDK
-   ├─ adk_debate_judge.py      # alternative green agent impl using Google ADK
-   ├─ debate_judge_common.py   # models and utils shared by above impls
-   ├─ debater.py               # debater agent (Google ADK)
-   └─ scenario.toml            # config for the debate example
+TBD
 ```
 
 # Architectural Diagram
