@@ -864,8 +864,6 @@ Examples of responses:
 }}}, indent=2)}
 </json>
 
-Now here is the request:
-{observation}
 """
 
     async def _parse_and_execute_tools(self, response: str, use_mcp: bool = False) -> tuple[str, Optional[str]]:
