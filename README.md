@@ -14,7 +14,6 @@ cp sample.env .env
 ```
 Add your Google/OpenAI/nebius API keys to the .env file
 
-```
 4. Run the [corebench example](#example)
 
 Return to the tutorial repository and run
