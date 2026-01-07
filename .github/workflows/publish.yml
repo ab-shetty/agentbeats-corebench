@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           # Update this to build your own agent images.
-          - name: tau2-agent
+          - name: corebench-agent
             dockerfile: scenarios/corebench/Dockerfile.corebench-agent
-          - name: tau2-evaluator
+          - name: corebench-evaluator
             dockerfile: scenarios/corebench/Dockerfile.corebench-evaluator
 
     # These permissions are required for the workflow to:
