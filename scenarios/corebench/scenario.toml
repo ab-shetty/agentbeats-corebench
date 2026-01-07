@@ -9,6 +9,6 @@ cmd = "python scenarios/corebench/corebench_agent.py --host 127.0.0.1 --port 901
 
 [config]
 domain = "corebench_easy"  # or corebench_medium, corebench_hard
-num_tasks = 3
+num_tasks = 1
 use_mcp = true
 mcp_server_command = ["uv", "run", "mcp", "run", "scenarios/corebench/mcp_server.py"]
