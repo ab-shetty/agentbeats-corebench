@@ -17,9 +17,9 @@ jobs:
         include:
           # Update this to build your own agent images.
           - name: tau2-agent
-            dockerfile: scenarios/tau2/Dockerfile.tau2-agent
+            dockerfile: scenarios/corebench/Dockerfile.corebench-agent
           - name: tau2-evaluator
-            dockerfile: scenarios/tau2/Dockerfile.tau2-evaluator
+            dockerfile: scenarios/corebench/Dockerfile.corebench-evaluator
 
     # These permissions are required for the workflow to:
     # - Read repository contents (checkout code)
