@@ -144,7 +144,7 @@ def query_vision_language_model(query: str, image_path: str) -> str:
         
         # Create the message with text and image
         response = litellm.completion(
-            model="gpt-4o-2024-11-20",
+            model="gpt-5-mini",
             messages=[
                 {
                     "role": "user",

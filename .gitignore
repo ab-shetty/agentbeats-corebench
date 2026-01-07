@@ -2,6 +2,7 @@
 .DS_Store
 .python-version
 .venv/
+capsules/
 __pycache__/
 *.pyc
 scenarios/corebench/test_mcp_tools_client.py

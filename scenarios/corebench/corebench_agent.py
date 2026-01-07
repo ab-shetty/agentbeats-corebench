@@ -113,8 +113,12 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
         for turn in range(max_turns):
             try:
+                # model can take values such as:
+                # "gemini/gemini-3-pro-preview"
+                # "openai/gpt-5-mini"
+                # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 response = completion(
-                    model="openai/gpt-5-mini",
+                    model="nebius/openai/gpt-oss-120b",
                     messages=messages,
                 )
 

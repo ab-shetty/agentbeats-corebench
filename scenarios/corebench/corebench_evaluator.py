@@ -268,7 +268,7 @@ def download_corebench_capsule(
         
 def delete_corebench_capsule(
     capsule_id: str,
-    capsules_dir: str = "./scenarios/corebench"
+    capsules_dir: str = "./scenarios/corebench/capsules"
 ) -> str:
     """
     Delete a CoreBench capsule directory and clean up any associated files.
@@ -607,7 +607,6 @@ Task Results:
 
             break
 
-        delete_corebench_capsule(task_id)
         gt_result = task["results"]
 
         # Calculate total questions from ground truth (regardless of parsing success)
@@ -642,6 +641,9 @@ Task Results:
             }
 
         print ("Evaluation:", evaluation)
+        print("Deleting capsule")
+        delete_corebench_capsule(task_id)
+        print("capsule deletion run")
         return evaluation
 
     def __eval_result_json(self, gt_result: list, reported_result: Dict):
