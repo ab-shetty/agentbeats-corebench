@@ -15,6 +15,7 @@ import json
 import logging
 import subprocess
 import time
+import shutil
 from typing import Any, Optional, Dict
 import os
 
@@ -50,11 +51,15 @@ logger = logging.getLogger("corebench_evaluator")
 
 RESPOND_ACTION_NAME = "FINAL_ANSWER"
 
+# Define workspace directory
+WORKSPACE_DIR = os.path.join(os.path.dirname(__file__), "workspace")
+
 class SimpleMCPClient:
     """Simple MCP client using direct JSON-RPC over stdio"""
     
-    def __init__(self, server_command: list[str]):
+    def __init__(self, server_command: list[str], cwd: Optional[str] = None):
         self.server_command = server_command
+        self.cwd = cwd
         self.process: Optional[subprocess.Popen] = None
         self.request_id = 0
         self.tools = []
@@ -71,6 +76,7 @@ class SimpleMCPClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            cwd=self.cwd,
             bufsize=0  # Unbuffered
         )
         
@@ -213,6 +219,7 @@ def download_corebench_capsule(
     import urllib.request
     import tarfile
     import time
+    import socket
     from pathlib import Path
     
     try:
@@ -237,6 +244,7 @@ def download_corebench_capsule(
         for attempt in range(1, max_retries + 1):
             try:
                 print(f"Downloading capsule {capsule_id} (attempt {attempt}/{max_retries})...")
+                socket.setdefaulttimeout(300)  # 5 minutes timeout
                 urllib.request.urlretrieve(capsule_url, tar_path)
                 break
             except Exception as e:
@@ -323,14 +331,14 @@ def get_tasks(task_set_name):
         
     # Check if core_test.json exists, if not, throw an error with instructions to decrypt
     if not os.path.exists(core_test_path):
-        encrypted_file = os.path.join(os.path.dirname(__file__), "corebench", "core_test.json.gpg")
+        encrypted_file = os.path.join(os.path.dirname(__file__), "core_test.json.gpg")
         decrypt_command = f"gpg --output {core_test_path} --decrypt {encrypted_file}"
         raise FileNotFoundError(f"Have you decrypted core_test.json.gpg? Use the following command:\n{decrypt_command}. The password is \"reproducibility\".")
         
     with open(core_test_path, 'r') as f:
         dataset = json.load(f)
 
-    os.remove(core_test_path)
+    # os.remove(core_test_path)
 
     return dataset
 
@@ -354,7 +362,7 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
 
 
 class CoreBenchEvaluator(GreenAgent):
-    """Green agent that evaluates purple agents using tau-bench with MCP tools via SimpleMCPClient."""
+    """Green agent that evaluates purple agents using corebench with MCP tools via SimpleMCPClient."""
 
     def __init__(self):
         self._required_roles = ["agent"]  # The purple agent being tested
@@ -362,6 +370,57 @@ class CoreBenchEvaluator(GreenAgent):
         self._tool_provider = ToolProvider()
         self._mcp_client: Optional[SimpleMCPClient] = None
         self._mcp_tools = []
+        self._workspace_dir = WORKSPACE_DIR
+    
+    # Reset workspace directory
+    def _reset_workspace(self) -> None:
+        if os.path.exists(self._workspace_dir):
+            shutil.rmtree(self._workspace_dir)
+        os.makedirs(self._workspace_dir, exist_ok=True)
+
+    # Apply difficulty-specific filters to the folder where capsules are staged(copied)
+    def _apply_difficulty_filters(self, domain: str) -> None:
+        """
+        
+        """
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        results_dir = os.path.join(env_dir, "results")
+
+        # remove results directory for medium and hard difficulties
+        if domain in ("corebench_medium", "corebench_hard"):
+            if os.path.isdir(results_dir):
+                shutil.rmtree(results_dir)
+
+        if domain == "corebench_hard":
+            reproducing_path = os.path.join(env_dir, "REPRODUCING.md")
+            nested_env_dir = os.path.join(env_dir, "environment")
+            run_sh = os.path.join(env_dir, "code", "run.sh")
+            run_plain = os.path.join(env_dir, "code", "run")
+
+            # Remove REPRODUCING.md if exists
+            if os.path.isfile(reproducing_path):
+                os.remove(reproducing_path)
+            # Remove nested environment directory if exists
+            if os.path.isdir(nested_env_dir):
+                shutil.rmtree(nested_env_dir)
+            # Remove run.sh and run files if exist
+            if os.path.isfile(run_sh):
+                os.remove(run_sh)
+            if os.path.isfile(run_plain):
+                os.remove(run_plain)
+    
+    # Stage (copy) the capsule to the workspace directory
+    def _stage_capsule_to_workspace(self, capsule_id: str, domain: str) -> None:
+        capsule_dir = os.path.join(os.path.dirname(__file__), "capsules", capsule_id)
+        if not os.path.isdir(capsule_dir):
+            raise FileNotFoundError(f"Capsule directory not found: {capsule_dir}")
+
+        # Download capsule to workspace/environment/ 
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        os.makedirs(env_dir, exist_ok=True)
+        shutil.copytree(capsule_dir, env_dir, dirs_exist_ok=True)
+        # Apply filters based on difficulty level
+        self._apply_difficulty_filters(domain) 
 
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         missing_roles = set(self._required_roles) - set(request.participants.keys())
@@ -385,7 +444,7 @@ class CoreBenchEvaluator(GreenAgent):
         try:
             logger.info(f"Initializing MCP client with command: {' '.join(mcp_server_command)}")
             
-            self._mcp_client = SimpleMCPClient(mcp_server_command)
+            self._mcp_client = SimpleMCPClient(mcp_server_command, cwd=self._workspace_dir)
             await self._mcp_client.connect()
             
             self._mcp_tools = self._mcp_client.tools
@@ -436,21 +495,29 @@ class CoreBenchEvaluator(GreenAgent):
         # MCP server configuration
         use_mcp = req.config.get("use_mcp", False)
         mcp_server_command = req.config.get("mcp_server_command", ["uv", "run", "mcp", "run", "mcp_server.py"])
+        resolved_mcp_command = []
+        for part in mcp_server_command:
+            if isinstance(part, str) and part.endswith(".py") and not os.path.isabs(part):
+                resolved_mcp_command.append(os.path.abspath(part))
+            else:
+                resolved_mcp_command.append(part)
 
         # Get the purple agent URL
         agent_url = str(req.participants["agent"])
 
         # Initialize MCP client if enabled
         if use_mcp:
+            # Ensure workspace exists before starting MCP server
+            self._reset_workspace()
             try:
-                await self._init_mcp_client(mcp_server_command)
+                await self._init_mcp_client(resolved_mcp_command)
                 await updater.update_status(
                     TaskState.working,
                     new_agent_text_message(f"MCP client initialized with {len(self._mcp_tools)} tools")
                 )
             except Exception as e:
                 await updater.update_status(
-                    TaskState.error,
+                    TaskState.failed,
                     new_agent_text_message(f"Failed to initialize MCP: {str(e)}")
                 )
                 return
@@ -563,6 +630,11 @@ Task Results:
         print("Building task...")
         task_description = self._build_task_prompt(task, domain, use_mcp)
         download_corebench_capsule(task_id)
+        self._stage_capsule_to_workspace(task_id, domain)
+
+        # Once capsule is downloaded, stage(copy) it to the workspace
+        # (After copying capsules to workspace, difficulty level filters are applied)
+        self._stage_capsule_to_workspace(task_id, domain)
 
         # Start a new conversation with the purple agent
         next_message = task_description
@@ -894,14 +966,38 @@ Examples of responses:
                 if match:
                     json_str = match.group(1)
 
+        action_dict = None # Avoid crashing if parsing fails
         if json_str:
-            action_dict = json.loads(json_str)
+            try:
+                action_dict = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON in tags: {e}")
         else:
             # Try to parse the entire response as JSON
-            action_dict = json.loads(response)
+            try:
+                action_dict = json.loads(response)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse response as JSON: {e}")
 
-        tool_name = action_dict["name"]
-        arguments = action_dict["arguments"]
+        if action_dict is None:
+            # Fallback: try to parse the first JSON object in the response
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                try:
+                    action_dict = json.loads(match.group(0))
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse fallback JSON object: {e}")
+
+        if action_dict is None:
+            logger.warning("No JSON tool call found; returning raw response.")
+            return response, None
+
+        try:
+            tool_name = action_dict["name"]
+            arguments = action_dict["arguments"]
+        except Exception as e:
+            logger.warning(f"Tool call JSON is missing required fields: {e}")
+            return response, None
         
         # Check if it's a respond action (direct user response)
         is_tool_call = tool_name != RESPOND_ACTION_NAME
