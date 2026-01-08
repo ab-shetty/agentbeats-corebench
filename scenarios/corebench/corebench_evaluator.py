@@ -411,7 +411,6 @@ class CoreBenchEvaluator(GreenAgent):
         if not os.path.isdir(capsule_dir):
             raise FileNotFoundError(f"Capsule directory not found: {capsule_dir}")
 
-        self._reset_workspace()
         shutil.copytree(capsule_dir, self._workspace_dir, dirs_exist_ok=True)
         self._apply_difficulty_filters(domain) # Apply filters based on difficulty level
 
@@ -959,14 +958,38 @@ Examples of responses:
                 if match:
                     json_str = match.group(1)
 
+        action_dict = None # Avoid crashing if parsing fails
         if json_str:
-            action_dict = json.loads(json_str)
+            try:
+                action_dict = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON in tags: {e}")
         else:
             # Try to parse the entire response as JSON
-            action_dict = json.loads(response)
+            try:
+                action_dict = json.loads(response)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse response as JSON: {e}")
 
-        tool_name = action_dict["name"]
-        arguments = action_dict["arguments"]
+        if action_dict is None:
+            # Fallback: try to parse the first JSON object in the response
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                try:
+                    action_dict = json.loads(match.group(0))
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse fallback JSON object: {e}")
+
+        if action_dict is None:
+            logger.warning("No JSON tool call found; returning raw response.")
+            return response, None
+
+        try:
+            tool_name = action_dict["name"]
+            arguments = action_dict["arguments"]
+        except Exception as e:
+            logger.warning(f"Tool call JSON is missing required fields: {e}")
+            return response, None
         
         # Check if it's a respond action (direct user response)
         is_tool_call = tool_name != RESPOND_ACTION_NAME
