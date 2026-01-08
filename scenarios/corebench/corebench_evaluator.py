@@ -386,6 +386,7 @@ class CoreBenchEvaluator(GreenAgent):
         env_dir = os.path.join(self._workspace_dir, "environment")
         results_dir = os.path.join(env_dir, "results")
 
+        # remove results directory for medium and hard difficulties
         if domain in ("corebench_medium", "corebench_hard"):
             if os.path.isdir(results_dir):
                 shutil.rmtree(results_dir)
@@ -396,10 +397,13 @@ class CoreBenchEvaluator(GreenAgent):
             run_sh = os.path.join(env_dir, "code", "run.sh")
             run_plain = os.path.join(env_dir, "code", "run")
 
+            # Remove REPRODUCING.md if exists
             if os.path.isfile(reproducing_path):
                 os.remove(reproducing_path)
+            # Remove nested environment directory if exists
             if os.path.isdir(nested_env_dir):
                 shutil.rmtree(nested_env_dir)
+            # Remove run.sh and run files if exist
             if os.path.isfile(run_sh):
                 os.remove(run_sh)
             if os.path.isfile(run_plain):
@@ -411,8 +415,12 @@ class CoreBenchEvaluator(GreenAgent):
         if not os.path.isdir(capsule_dir):
             raise FileNotFoundError(f"Capsule directory not found: {capsule_dir}")
 
-        shutil.copytree(capsule_dir, self._workspace_dir, dirs_exist_ok=True)
-        self._apply_difficulty_filters(domain) # Apply filters based on difficulty level
+        # Download capsule to workspace/environment/ 
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        os.makedirs(env_dir, exist_ok=True)
+        shutil.copytree(capsule_dir, env_dir, dirs_exist_ok=True)
+        # Apply filters based on difficulty level
+        self._apply_difficulty_filters(domain) 
 
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         missing_roles = set(self._required_roles) - set(request.participants.keys())
