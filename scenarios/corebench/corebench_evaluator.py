@@ -276,7 +276,7 @@ def download_corebench_capsule(
         
 def delete_corebench_capsule(
     capsule_id: str,
-    capsules_dir: str = "./scenarios/corebench/capsules"
+    capsules_dir: str,
 ) -> str:
     """
     Delete a CoreBench capsule directory and clean up any associated files.
@@ -381,7 +381,7 @@ class CoreBenchEvaluator(GreenAgent):
     # Apply difficulty-specific filters to the folder where capsules are staged(copied)
     def _apply_difficulty_filters(self, domain: str) -> None:
         """
-        
+        Apply difficulty-specific filters to the capsule in the workspace.
         """
         env_dir = os.path.join(self._workspace_dir, "environment")
         results_dir = os.path.join(env_dir, "results")
@@ -409,19 +409,6 @@ class CoreBenchEvaluator(GreenAgent):
             if os.path.isfile(run_plain):
                 os.remove(run_plain)
     
-    # Stage (copy) the capsule to the workspace directory
-    def _stage_capsule_to_workspace(self, capsule_id: str, domain: str) -> None:
-        capsule_dir = os.path.join(os.path.dirname(__file__), "capsules", capsule_id)
-        if not os.path.isdir(capsule_dir):
-            raise FileNotFoundError(f"Capsule directory not found: {capsule_dir}")
-
-        # Download capsule to workspace/environment/ 
-        env_dir = os.path.join(self._workspace_dir, "environment")
-        os.makedirs(env_dir, exist_ok=True)
-        shutil.copytree(capsule_dir, env_dir, dirs_exist_ok=True)
-        # Apply filters based on difficulty level
-        self._apply_difficulty_filters(domain) 
-
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         missing_roles = set(self._required_roles) - set(request.participants.keys())
         if missing_roles:
@@ -629,12 +616,17 @@ Task Results:
         # Build the initial task description for the purple agent
         print("Building task...")
         task_description = self._build_task_prompt(task, domain, use_mcp)
-        download_corebench_capsule(task_id)
-        self._stage_capsule_to_workspace(task_id, domain)
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        # Download capsule to workspace (creates workspace/{capsule_id}/)
+        download_corebench_capsule(task_id, target_dir=self._workspace_dir)
 
-        # Once capsule is downloaded, stage(copy) it to the workspace
-        # (After copying capsules to workspace, difficulty level filters are applied)
-        self._stage_capsule_to_workspace(task_id, domain)
+        # Rename to environment directory
+        capsule_path = os.path.join(self._workspace_dir, task_id)
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        os.rename(capsule_path, env_dir)
+
+        # Apply difficulty filters
+        self._apply_difficulty_filters(domain)
 
         # Start a new conversation with the purple agent
         next_message = task_description
@@ -713,9 +705,11 @@ Task Results:
             }
 
         print ("Evaluation:", evaluation)
-        print("Deleting capsule")
-        delete_corebench_capsule(task_id)
-        print("capsule deletion run")
+        print("Cleaning up environment")
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        if os.path.exists(env_dir):
+            shutil.rmtree(env_dir)
+        print("Environment cleanup complete")
         return evaluation
 
     def __eval_result_json(self, gt_result: list, reported_result: Dict):
