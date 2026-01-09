@@ -140,7 +140,7 @@ class SimpleMCPClient:
         
         return self
     
-    async def _send_request(self, method: str, params: dict, timeout: float = 30.0) -> dict:
+    async def _send_request(self, method: str, params: dict, timeout: float = 90.0) -> dict:
         """Send a JSON-RPC request and get response"""
         self.request_id += 1
         
@@ -812,18 +812,37 @@ Task Results:
             try:
                 for key in reported_result.keys():
                     if key in numeric_keys:
+                        value = reported_result[key]
                         lower_bound, upper_bound = prediction_interval_bounds[key]
-                        is_correct = (lower_bound <= reported_result[key] <= upper_bound)
+                        if not isinstance(value, (int, float)):
+                            # Wrong answer
+                            question_breakdown.append({
+                                "question": key,
+                                "type": "numeric",
+                                "is_vision": 'fig' in key,
+                                "correct": False,
+                                "submitted": value,
+                                "prediction_interval": {
+                                    "lower": round(lower_bound, 3),
+                                    "upper": round(upper_bound, 3)
+                                }
+                            })
+                            continue
+
+                        is_correct = bool(lower_bound <= value <= upper_bound)
+
                         if is_correct:
-                            if 'fig' in key: correct_vision_answers += 1
-                            else: correct_written_answers += 1
-                        
+                            if 'fig' in key:
+                                correct_vision_answers += 1
+                            else:
+                                correct_written_answers += 1
+
                         question_breakdown.append({
                             "question": key,
                             "type": "numeric",
                             "is_vision": 'fig' in key,
                             "correct": is_correct,
-                            "submitted": reported_result[key],
+                            "submitted": value,
                             "prediction_interval": {
                                 "lower": round(lower_bound, 3),
                                 "upper": round(upper_bound, 3)
@@ -964,7 +983,7 @@ Task Results:
 \n\n
 {tools_section}
 
-Please respond in JSON format. Wrap the JSON with <json>...</json> tags.
+Please respond in JSON format. Wrap the JSON with <json>...</json> tags. When including multi-line strings inside JSON, you MUST escape newlines as \\n.
 The JSON should contain:
 - "name": the tool call function name, or "{RESPOND_ACTION_NAME}" if you are ready to provide the final answer.
 - "arguments": the arguments for the tool call, or {{"content": {{"question1": "answer1", "question2": "answer2"}}}} to provide the final answer.
