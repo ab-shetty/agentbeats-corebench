@@ -56,7 +56,6 @@ dependencies = [
     { name = "nbconvert" },
     { name = "notebook" },
     { name = "openpyxl" },
-    { name = "pdfminer" },
     { name = "pdfminer-six" },
     { name = "puremagic" },
     { name = "pydantic" },
@@ -100,7 +99,6 @@ requires-dist = [
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "notebook", specifier = ">=7.5.1" },
     { name = "openpyxl", specifier = ">=3.1.5" },
-    { name = "pdfminer", specifier = ">=20191125" },
     { name = "pdfminer-six", specifier = ">=20251230" },
     { name = "puremagic", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.11.9" },
@@ -3509,15 +3507,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/fa/2a/52a8da6fe965dea61
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9a/70/875f4a23bfc4731703a5835487d0d2fb999031bd415e7d17c0ae615c18b7/pathvalidate-3.3.1-py3-none-any.whl", hash = "sha256:5263baab691f8e1af96092fa5137ee17df5bdfbd6cff1fcac4d6ef4bc2e1735f", size = 24305, upload-time = "2025-06-15T09:07:19.117Z" },
 ]
-
-[[package]]
-name = "pdfminer"
-version = "20191125"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pycryptodome" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/71/a3/155c5cde5f9c0b1069043b2946a93f54a41fd72cc19c6c100f6f2f5bdc15/pdfminer-20191125.tar.gz", hash = "sha256:9e700bc731300ed5c8936343c1dd4529638184198e54e91dd2b59b64a755dc01", size = 4173248, upload-time = "2019-11-25T12:02:21.1Z" }
 
 [[package]]
 name = "pdfminer-six"
