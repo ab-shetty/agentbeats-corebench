@@ -15,3 +15,4 @@ scenarios/corebench/test_mcp_tools_simple.py
 scenarios/corebench/test_mcp_tools.py
 /scenarios/corebench/capsules
 *.log
+scenarios/corebench/workspace/
