@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.12-trixie
+FROM ghcr.io/astral-sh/uv:python3.13-trixie
 
 RUN adduser agentbeats
 USER agentbeats
@@ -12,7 +12,7 @@ RUN \
     --mount=type=cache,target=/home/agentbeats/.cache/uv,uid=1000 \
     uv sync --locked
 
-COPY scenarios scenarios
+COPY --chown=agentbeats:agentbeats scenarios scenarios
 
 ENTRYPOINT ["uv", "run", "scenarios/corebench/corebench_evaluator.py"]
 CMD ["--host", "0.0.0.0"]
