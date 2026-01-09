@@ -39,7 +39,7 @@ def execute_bash(command: str) -> str:
             shell=True, 
             capture_output=True, 
             text=True,
-            timeout=30
+            timeout=500
         )
         output = f"Exit Code: {result.returncode}\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}"
         
