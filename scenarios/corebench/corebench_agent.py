@@ -118,7 +118,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # "openai/gpt-5-mini"
                 # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 response = completion(
-                    model="nebius/openai/gpt-oss-120b",
+                    model="openai/gpt-5-mini", #"nebius/openai/gpt-oss-120b",
                     messages=messages,
                 )
 
