@@ -154,9 +154,9 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # "gemini/gemini-3-pro-preview"
                 # "openai/gpt-5-mini"
                 # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
-                logger.info("Calling LLM: nebius/openai/gpt-oss-120b")
+                logger.info("Calling LLM:")
                 response = completion(
-                    model="nebius/openai/gpt-oss-120b",
+                    model="nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct",
                     messages=messages,
                 )
 
