@@ -28,7 +28,6 @@ dependencies = [
     "nbconvert>=7.16.6",
     "notebook>=7.5.1",
     "openpyxl>=3.1.5",
-    "pdfminer>=20191125",
     "pdfminer-six>=20251230",
     "puremagic>=1.30",
     "pydantic>=2.11.9",
