@@ -1199,6 +1199,23 @@ async def main():
     logger.info("Server starting...")
     await uvicorn_server.serve()
 
+def test_download_capsules():
+    workspace_dir = "./test_corebench_download"
+    os.makedirs(workspace_dir, exist_ok=True)
+    
+    capsule_ids = ["capsule-5507257", "capsule-3560168"]
+    
+    for capsule_id in capsule_ids:
+        logger.info(f"Downloading capsule {capsule_id}...")
+        try:
+            result_path = download_corebench_capsule(capsule_id, target_dir=workspace_dir)
+            if os.path.exists(result_path):
+                logger.info(f"✅ Capsule {capsule_id} downloaded successfully at: {result_path}")
+            else:
+                logger.error(f"❌ Capsule {capsule_id} download returned path but folder not found: {result_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to download capsule {capsule_id}: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
+    # test_download_capsules()
