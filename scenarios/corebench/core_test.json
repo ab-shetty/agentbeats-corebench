@@ -975,5 +975,29 @@
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.1889895.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python",
+        "capsule_title": "BERTopic-based topic modeling in scientometric analysis of Blockchain integrated Digital Twin Security",
+        "capsule_id": "capsule-3560168",
+        "task_prompt": "Run the run file and report the final summary metrics.",
+        "results": [
+            {
+                "Report the top topic word for Topic 0": “blockchain”,
+                "Report the top topic word for Topic 4": “digital”
+            },
+            {
+                "Report the top topic word for Topic 0": “blockchain”,
+                "Report the top topic word for Topic 4": “digital”
+            },
+            {
+                "Report the top topic word for Topic 0": “blockchain”,
+                "Report the top topic word for Topic 4": “digital”
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.8174015.v1"
     }
+
 ]
