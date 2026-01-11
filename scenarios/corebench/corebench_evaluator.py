@@ -372,6 +372,7 @@ class CoreBenchEvaluator(GreenAgent):
         self._mcp_client: Optional[SimpleMCPClient] = None
         self._mcp_tools = []
         self._workspace_dir = WORKSPACE_DIR
+        self._keep_environment = False
     
     # Reset workspace directory
     def _reset_workspace(self) -> None:
@@ -426,12 +427,12 @@ class CoreBenchEvaluator(GreenAgent):
         logger.info("Request validation passed")
         return True, "ok"
 
-    async def _init_mcp_client(self, mcp_server_command: list[str]) -> list:
+    async def _init_mcp_client(self, mcp_server_command: list[str], cwd: Optional[str] = None) -> list:
         """Initialize MCP client connection to a tool server."""
         try:
             logger.info(f"Initializing MCP client with command: {' '.join(mcp_server_command)}")
-            
-            self._mcp_client = SimpleMCPClient(mcp_server_command, cwd=self._workspace_dir)
+            effective_cwd = cwd or self._workspace_dir
+            self._mcp_client = SimpleMCPClient(mcp_server_command, cwd=effective_cwd)
             await self._mcp_client.connect()
             
             self._mcp_tools = self._mcp_client.tools
@@ -486,6 +487,7 @@ class CoreBenchEvaluator(GreenAgent):
         # MCP server configuration
         use_mcp = req.config.get("use_mcp", False)
         mcp_server_command = req.config.get("mcp_server_command", ["uv", "run", "mcp", "run", "mcp_server.py"])
+        self._keep_environment = req.config.get("keep_environment", False)
         resolved_mcp_command = []
         for part in mcp_server_command:
             if isinstance(part, str) and part.endswith(".py") and not os.path.isabs(part):
@@ -504,19 +506,6 @@ class CoreBenchEvaluator(GreenAgent):
         if use_mcp:
             # Ensure workspace exists before starting MCP server
             self._reset_workspace()
-            try:
-                await self._init_mcp_client(resolved_mcp_command)
-                await updater.update_status(
-                    TaskState.working,
-                    new_agent_text_message(f"MCP client initialized with {len(self._mcp_tools)} tools")
-                )
-            except Exception as e:
-                logger.error(f"Failed to initialize MCP: {e}")
-                await updater.update_status(
-                    TaskState.failed,
-                    new_agent_text_message(f"Failed to initialize MCP: {str(e)}")
-                )
-                return
 
         # Get task IDs
         resolved_task_ids = get_task_ids(domain, task_ids, num_tasks)
@@ -550,6 +539,7 @@ class CoreBenchEvaluator(GreenAgent):
                         user_llm=user_llm,
                         user_llm_args=user_llm_args,
                         use_mcp=use_mcp,
+                        mcp_server_command=resolved_mcp_command,
                     )
                     eval_results = {
                         task_id: reward
@@ -628,16 +618,12 @@ Task Results:
         user_llm: str,
         user_llm_args: dict,
         use_mcp: bool = True,
+        mcp_server_command: Optional[list[str]] = None,
     ) -> float:
         """Run a single task and return the reward."""
         logger.info(f"Starting single task: {task_id}")
 
         terminated = False
-        
-        # Build the initial task description for the purple agent
-        logger.debug("Building task prompt")
-        task_description = self._build_task_prompt(task, domain, use_mcp)
-        logger.debug(f"Task description length: {len(task_description)} chars")
         
         env_dir = os.path.join(self._workspace_dir, "environment")
         
@@ -653,8 +639,48 @@ Task Results:
         logger.debug(f"Renaming {capsule_path} to {env_dir}")
         os.rename(capsule_path, env_dir)
 
+        # Uncomment below to use cached capsules instead of downloading each time
+        # # Download capsule to cache directory
+        # logger.info(f"Downloading capsule {task_id}")
+        # capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
+        # download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
+        # logger.info(f"Download result: {download_result}")
+
+        # # Copy to environment directory (keep original capsule folder intact)
+        # capsule_path = os.path.join(capsules_dir, task_id)
+        # env_dir = os.path.join(self._workspace_dir, "environment")
+
+        if os.path.exists(env_dir):
+            shutil.rmtree(env_dir)
+
+        logger.debug(f"Copying {capsule_path} to {env_dir}")
+        shutil.copytree(capsule_path, env_dir)
+
+
         # Apply difficulty filters
         self._apply_difficulty_filters(domain)
+
+        # Initialize MCP client after staging so PWD is workspace/environment
+        if use_mcp:
+            try:
+                await self._init_mcp_client(mcp_server_command or [], cwd=env_dir)
+                # Check docker availability via MCP. This is to distinguish agent error from docker error.
+                try:
+                    docker_check = await self._call_mcp_tool(
+                        "execute_bash",
+                        {"command": "docker --version || which docker || echo 'docker not found'"}
+                    )
+                    logger.info(f"Docker availability (MCP): {docker_check.strip()}")
+                except Exception as e:
+                    logger.warning(f"Docker availability check failed: {e}")
+            except Exception as e:
+                logger.error(f"Failed to initialize MCP: {e}")
+                raise
+
+        # Build the initial task description for the purple agent
+        logger.debug("Building task prompt")
+        task_description = self._build_task_prompt(task, domain, use_mcp)
+        logger.debug(f"Task description length: {len(task_description)} chars")
 
         # Start a new conversation with the purple agent
         next_message = task_description
@@ -764,6 +790,13 @@ Task Results:
         if os.path.exists(env_dir):
             shutil.rmtree(env_dir)
         logger.debug("Environment cleanup complete")
+
+        if use_mcp and self._mcp_client:
+            try:
+                await self._mcp_client.disconnect()
+            except Exception as e:
+                logger.error(f"Error cleaning up MCP client: {e}")
+            self._mcp_client = None
         
         return evaluation
 
