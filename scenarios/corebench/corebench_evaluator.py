@@ -634,10 +634,10 @@ Task Results:
 
         # Rename to environment directory
         capsule_path = os.path.join(self._workspace_dir, task_id)
-        env_dir = os.path.join(self._workspace_dir, "environment")
-        
+
         logger.debug(f"Renaming {capsule_path} to {env_dir}")
         os.rename(capsule_path, env_dir)
+        
 
         # Uncomment below to use cached capsules instead of downloading each time
         # # Download capsule to cache directory
@@ -649,13 +649,6 @@ Task Results:
         # # Copy to environment directory (keep original capsule folder intact)
         # capsule_path = os.path.join(capsules_dir, task_id)
         # env_dir = os.path.join(self._workspace_dir, "environment")
-
-        if os.path.exists(env_dir):
-            shutil.rmtree(env_dir)
-
-        logger.debug(f"Copying {capsule_path} to {env_dir}")
-        shutil.copytree(capsule_path, env_dir)
-
 
         # Apply difficulty filters
         self._apply_difficulty_filters(domain)
