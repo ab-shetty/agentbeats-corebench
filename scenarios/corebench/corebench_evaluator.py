@@ -1231,5 +1231,5 @@ def test_download_capsules():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main())
-    test_download_capsules()
+    asyncio.run(main())
+    # test_download_capsules()
