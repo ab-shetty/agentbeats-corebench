@@ -30,6 +30,12 @@ import gymnasium as gym
 import uvicorn
 from dotenv import load_dotenv
 
+import urllib.request
+import tarfile
+import zipfile
+import socket
+import gdown
+
 load_dotenv()
 
 from a2a.server.apps import A2AStarletteApplication
@@ -244,82 +250,106 @@ def mcp_tools_to_str(mcp_tools: list) -> str:
         tool_list.append(tool_dict)
     return json.dumps(tool_list, indent=2)
 
+# ----------------------
+# Load manifest once
+# ----------------------
+# Manifest JSON example:
+# [
+#  {"capsule_id": "capsule-3560168", "gdrive_file_id": "1vZK3IitSvqu_Ic3zrcviJ1aojYX6lpUY"},
+# ]
+with open("capsule_extension.json") as f:
+    CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
 
-def download_corebench_capsule(
-    capsule_id: str,
-    target_dir: str = "./scenarios/corebench/capsules"
-) -> str:
-    """Download and extract a CoreBench capsule from the repository."""
-    import urllib.request
-    import tarfile
-    import time
-    import socket
-    from pathlib import Path
+
+# ----------------------
+# Helper: Princeton download
+# ----------------------
+def _download_from_princeton(capsule_id: str, capsules_dir: Path):
+    """
+    Try to download a capsule from Princeton CoreBench mirror.
+    Returns (success_flag: bool, message: str)
+    """
+    capsule_dir = capsules_dir / capsule_id
+    tar_path = capsules_dir / f"{capsule_id}.tar.gz"
+    capsule_url = f"https://corebench.cs.princeton.edu/capsules/{capsule_id}.tar.gz"
+
+    try:
+        socket.setdefaulttimeout(300)
+        logger.info(f"Downloading {capsule_id} from Princeton mirror...")
+        urllib.request.urlretrieve(capsule_url, tar_path)
+    except Exception as e:
+        # Likely 404 if capsule not in Princeton
+        return False, f"Capsule {capsule_id} not found in Princeton: {e}"
+
+    try:
+        logger.info(f"Extracting {capsule_id}...")
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(capsules_dir)
+        tar_path.unlink()
+        return True, f"Downloaded capsule {capsule_id} from Princeton"
+    except Exception as e:
+        if tar_path.exists():
+            tar_path.unlink()
+        return False, f"Failed to extract Princeton capsule {capsule_id}: {e}"
+
+
+# ----------------------
+# Helper: Google Drive download
+# ----------------------
+def download_capsule_from_gdrive(capsule_id: str, gdrive_file_id: str, target_dir: Path):
+    """
+    Download a capsule ZIP from Google Drive and extract it
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    capsule_dir = target_dir / capsule_id
+    if capsule_dir.exists():
+        logger.info(f"{capsule_id} already exists at {capsule_dir}")
+        return capsule_dir
+
+    zip_path = target_dir / f"{capsule_id}.zip"
+    url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+
+    logger.info(f"Downloading {capsule_id} from Google Drive...")
+    gdown.download(url, str(zip_path), quiet=False)
+
+    logger.info(f"Extracting {capsule_id}...")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(capsule_dir)
+
+    zip_path.unlink()
+    logger.info(f"Downloaded and extracted {capsule_id} to {capsule_dir}")
+    return capsule_dir
+
+
+# ----------------------
+# Main: download single capsule (targeted)
+# ----------------------
+def download_corebench_capsule(capsule_id: str, target_dir: str = "./scenarios/corebench/capsules"):
+    """
+    Download a single CoreBench capsule (targeted):
+    1) Try Princeton mirror first
+    2) Fallback to Google Drive if listed in manifest
+    """
+    target_dir = Path(target_dir)
+    capsule_dir = target_dir / capsule_id
     
     logger.info(f"Downloading capsule {capsule_id}")
-    
-    try:
-        # Create target directory if it doesn't exist
-        capsules_dir = Path(target_dir)
-        capsules_dir.mkdir(parents=True, exist_ok=True)
-        
-        capsule_dir = capsules_dir / capsule_id
-        
-        # Check if already downloaded
-        if capsule_dir.exists():
-            logger.info(f"Capsule {capsule_id} already exists at {capsule_dir}")
-            return f"Capsule {capsule_id} already exists at {capsule_dir}"
-        
-        # Download URL and paths
-        capsule_url = f"https://corebench.cs.princeton.edu/capsules/{capsule_id}.tar.gz"
-        tar_path = capsules_dir / f"{capsule_id}.tar.gz"
-        
-        logger.debug(f"Download URL: {capsule_url}")
-        logger.debug(f"Tar path: {tar_path}")
-        
-        # Download with retry logic
-        max_retries = 5
-        backoff_factor = 1
-        
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info(f"Downloading capsule {capsule_id} (attempt {attempt}/{max_retries})...")
-                socket.setdefaulttimeout(300)  # 5 minutes timeout
-                urllib.request.urlretrieve(capsule_url, tar_path)
-                logger.info(f"Download complete: {tar_path.stat().st_size} bytes")
-                break
-            except Exception as e:
-                logger.warning(f"Download attempt {attempt} failed: {e}")
-                if attempt == max_retries:
-                    logger.error(f"Failed to download capsule {capsule_id} after {max_retries} attempts")
-                    return f"Failed to download capsule {capsule_id} after {max_retries} attempts: {str(e)}"
-                
-                sleep_time = backoff_factor * (2 ** (attempt - 1))
-                logger.info(f"Retrying in {sleep_time}s...")
-                time.sleep(sleep_time)
-        
-        # Extract the archive
-        try:
-            logger.info(f"Extracting capsule {capsule_id}...")
-            with tarfile.open(tar_path, "r:gz") as tar:
-                tar.extractall(path=capsules_dir)
-            
-            # Remove tar file after successful extraction
-            tar_path.unlink()
-            logger.info(f"Extraction complete, tar file removed")
-            
-            return f"Successfully downloaded and extracted capsule {capsule_id} to {capsule_dir}"
-            
-        except Exception as e:
-            logger.error(f"Failed to extract capsule {capsule_id}: {e}")
-            if tar_path.exists():
-                tar_path.unlink()
-            return f"Failed to extract capsule {capsule_id}: {str(e)}"
-            
-    except Exception as e:
-        logger.error(f"Error downloading capsule {capsule_id}: {e}")
-        logger.debug(traceback.format_exc())
-        return f"Error downloading capsule {capsule_id}: {str(e)}"
+
+    if capsule_dir.exists():
+        return f"{capsule_id} already exists locally"
+
+    # Try Princeton
+    ok, msg = _download_from_princeton(capsule_id, target_dir)
+    if ok:
+        return msg
+
+    # Fallback: Google Drive (only for this capsule if listed)
+    gdrive_file_id = CAPSULE_LOOKUP.get(capsule_id)
+    if gdrive_file_id:
+        return download_capsule_from_gdrive(capsule_id, gdrive_file_id, target_dir)
+
+    return f"No download source available for {capsule_id}"
+
 
 
 def get_tasks(task_set_name):
