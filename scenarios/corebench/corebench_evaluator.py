@@ -628,43 +628,34 @@ Task Results:
         env_dir = os.path.join(self._workspace_dir, "environment")
         
         # Download capsule to workspace
-        # logger.info(f"Downloading capsule {task_id}")
-        # download_result = download_corebench_capsule(task_id, target_dir=self._workspace_dir)
-        # logger.info(f"Download result: {download_result}")
-
-        # # Rename to environment directory
-        # capsule_path = os.path.join(self._workspace_dir, task_id)
-        # env_dir = os.path.join(self._workspace_dir, "environment")
-        
-        # logger.debug(f"Renaming {capsule_path} to {env_dir}")
-        # os.rename(capsule_path, env_dir)
-
-        # Download capsule to cache directory
         logger.info(f"Downloading capsule {task_id}")
-        capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
-        download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
+        download_result = download_corebench_capsule(task_id, target_dir=self._workspace_dir)
         logger.info(f"Download result: {download_result}")
 
-        # Copy to environment directory (keep original capsule folder intact)
-        capsule_path = os.path.join(capsules_dir, task_id)
+        # Rename to environment directory
+        capsule_path = os.path.join(self._workspace_dir, task_id)
         env_dir = os.path.join(self._workspace_dir, "environment")
+        
+        logger.debug(f"Renaming {capsule_path} to {env_dir}")
+        os.rename(capsule_path, env_dir)
+
+        # Uncomment below to use cached capsules instead of downloading each time
+        # # Download capsule to cache directory
+        # logger.info(f"Downloading capsule {task_id}")
+        # capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
+        # download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
+        # logger.info(f"Download result: {download_result}")
+
+        # # Copy to environment directory (keep original capsule folder intact)
+        # capsule_path = os.path.join(capsules_dir, task_id)
+        # env_dir = os.path.join(self._workspace_dir, "environment")
 
         if os.path.exists(env_dir):
             shutil.rmtree(env_dir)
 
         logger.debug(f"Copying {capsule_path} to {env_dir}")
         shutil.copytree(capsule_path, env_dir)
-        
 
-        # Create /data, /code, /results symlinks to match capsule expectations
-        for link_name, target_name in [("/data", "data"), ("/code", "code"), ("/results", "results")]:
-            link_target = os.path.join(env_dir, target_name)
-            try:
-                if os.path.islink(link_name) or os.path.exists(link_name):
-                    os.remove(link_name)
-                os.symlink(link_target, link_name, target_is_directory=True)
-            except OSError as e:
-                logger.warning(f"Failed to create symlink {link_name} -> {link_target}: {e}")
 
         # Apply difficulty filters
         self._apply_difficulty_filters(domain)
@@ -673,6 +664,7 @@ Task Results:
         if use_mcp:
             try:
                 await self._init_mcp_client(mcp_server_command or [], cwd=env_dir)
+                # Check docker availability via MCP. This is to distinguish agent error from docker error.
                 try:
                     docker_check = await self._call_mcp_tool(
                         "execute_bash",
