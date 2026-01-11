@@ -257,8 +257,18 @@ def mcp_tools_to_str(mcp_tools: list) -> str:
 # [
 #  {"capsule_id": "capsule-3560168", "gdrive_file_id": "1vZK3IitSvqu_Ic3zrcviJ1aojYX6lpUY"},
 # ]
-with open("capsule_extension.json") as f:
+
+HERE = Path(__file__).resolve().parent
+CAPSULE_EXTENSION_PATH = HERE / "capsule_extension.json"
+if not CAPSULE_EXTENSION_PATH.exists():
+    logger.warning(f"{CAPSULE_EXTENSION_PATH} does not exist — GDrive fallback will fail")
+
+with open(CAPSULE_EXTENSION_PATH) as f:
     CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
+logger.info(f"Loaded {len(CAPSULE_LOOKUP)} capsules from manifest")
+
+# with open("./scenarios/corebench/capsule_extension.json") as f:
+#     CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
 
 
 # ----------------------
@@ -342,6 +352,8 @@ def download_corebench_capsule(capsule_id: str, target_dir: str = "./scenarios/c
     ok, msg = _download_from_princeton(capsule_id, target_dir)
     if ok:
         return msg
+    print(f"[corebench] Princeton failed: {msg}")
+
 
     # Fallback: Google Drive (only for this capsule if listed)
     gdrive_file_id = CAPSULE_LOOKUP.get(capsule_id)
@@ -1216,6 +1228,8 @@ def test_download_capsules():
         except Exception as e:
             logger.error(f"❌ Failed to download capsule {capsule_id}: {e}")
 
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
-    # test_download_capsules()
+    # asyncio.run(main())
+    test_download_capsules()
