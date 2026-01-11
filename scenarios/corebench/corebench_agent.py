@@ -156,12 +156,82 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 logger.info("Calling LLM:")
                 response = completion(
-                    model="openai/gpt-5-mini", #"nebius/openai/gpt-oss-120b",
+                    model="nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct",# "openai/gpt-5-mini"
                     messages=messages,
                 )
 
-                assistant_content = response.choices[0].message.content
-                logger.info(f"LLM turn {turn}: {assistant_content[:200]}")
+                # Log the response details
+                logger.debug(f"LLM Response object: {response}")
+                logger.debug(f"Response choices: {response.choices if hasattr(response, 'choices') else 'No choices'}")
+                
+                # Check if response has the expected structure
+                if not hasattr(response, 'choices') or not response.choices:
+                    logger.error("LLM response has no choices!")
+                    logger.error(f"Response type: {type(response)}")
+                    logger.error(f"Response dict: {response.__dict__ if hasattr(response, '__dict__') else 'No __dict__'}")
+                    raise ValueError("LLM response missing choices")
+                
+                if not response.choices[0]:
+                    logger.error("First choice is None or empty!")
+                    raise ValueError("First choice is empty")
+                
+                if not hasattr(response.choices[0], 'message'):
+                    logger.error(f"First choice has no message! Choice: {response.choices[0]}")
+                    raise ValueError("Choice has no message attribute")
+                
+                if not hasattr(response.choices[0].message, 'content'):
+                    logger.error(f"Message has no content! Message: {response.choices[0].message}")
+                    raise ValueError("Message has no content attribute")
+
+                message = response.choices[0].message
+                assistant_content = message.content
+
+                # Handle reasoning-only responses (common with some models)
+                if assistant_content is None:
+                    reasoning_content = getattr(message, 'reasoning_content', None)
+                    if reasoning_content:
+                        logger.warning("Got reasoning but no content, prompting model to provide actual tool call")
+                        logger.debug(f"Reasoning: {reasoning_content}")
+                        
+                        # Add reasoning to history for context
+                        messages.append({
+                            "role": "assistant",
+                            "content": f"[Internal reasoning: {reasoning_content}]"
+                        })
+                        
+                        # Prompt for actual action
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "You've analyzed what needs to be done. Now provide the actual tool call "
+                                "in the required JSON format:\n\n"
+                                "<json>\n"
+                                "{\n"
+                                '  "name": "tool_name",\n'
+                                '  "arguments": {...}\n'
+                                "}\n"
+                                "</json>"
+                            )
+                        })
+                        
+                        # Call LLM again
+                        logger.info("Calling LLM again for actual tool call")
+                        response = completion(
+                            model="nebius/openai/gpt-oss-120b",
+                            messages=messages,
+                        )
+                        
+                        assistant_content = response.choices[0].message.content
+                        if assistant_content is None:
+                            logger.error("Follow-up request also returned no content!")
+                            raise ValueError("Both initial and follow-up responses had no content")
+                    else:
+                        logger.error("Assistant content is None and no reasoning_content!")
+                        logger.error(f"Message: {message}")
+                        raise ValueError("Assistant content is None")
+                
+                logger.info(f"LLM response length: {len(assistant_content)} chars")
+                logger.debug(f"Full LLM response: {assistant_content}")
 
                 messages.append(
                     {"role": "assistant", "content": assistant_content}
