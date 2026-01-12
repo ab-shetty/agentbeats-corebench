@@ -2,9 +2,9 @@
 
 **Testing AI Agents' Ability to Reproduce Published Scientific Research**
 
-> 🔬 **Based on [CoreBench](https://github.com/siegelz/core-bench)** by Siegel et al. — We "agentified" 
-> the original benchmark for the [AgentBeats](https://agentbeats.ai) platform, adding a green agent 
-> orchestrator, with comprehensive evaluation metrics and have contributed with new research capsules.
+🔬 **Based on [CoreBench](https://github.com/siegelz/core-bench)** by Siegel et al., we "agentified" 
+the original benchmark for the [AgentBeats](https://agentbeats.ai) platform, adding a green agent 
+orchestrator, with comprehensive evaluation metrics, and expanding the benchmark with new research capsules.
 
 ## Quickstart
 1. Clone the repo
@@ -48,9 +48,9 @@ The purple agent uses **Nebius API** `Qwen3-Coder-30B-A3B-Instruct` & **OpenAI A
 **Custom LLM Configuration Priority:**
 
 Model selection follows this priority (highest to lowest):
-1. **CLI `--model`** in `scenario.toml` — best for testing different models quickly
-2. **`COREBENCH_TEXT_MODEL`** env var — good for persistent defaults
-3. **Default** — `Qwen/Qwen3-Coder-30B-A3B-Instruct`
+1. CLI `--model` in `scenario.toml` - best for testing different models quickly
+2. `COREBENCH_TEXT_MODEL` env var - good for persistent defaults
+3. Default - `Qwen/Qwen3-Coder-30B-A3B-Instruct`
 
 <details>
 <summary><strong>Advanced: Self-Hosted vLLM</strong></summary>
@@ -124,7 +124,7 @@ Tasks: 1/2 passed (50.0%)
 📋 Task Results:
   capsule-5507257: ✅ (acc=100%, faith=0.95)
   capsule-3449234: ❌ (acc=66.7%, faith=0.80)
-
+```
 Full execution traces are saved to:
 ```
 logs/traces/corebench_trace_*.jsonl
@@ -192,8 +192,6 @@ agentbeats-corebench/
 | Issue                 | Solution                                                                                         |
 | --------------------- | ------------------------------------------------------------------------------------------------ |
 | **Command timed out** | Increase `timeout` in `mcp_server.py` (default 900s/15min). Heavy ML on ARM64 emulation may need more. |
-| **LLM API errors**    | Check API key in `.env`. For custom endpoints, ensure model name has `openai/` prefix if needed. |
-| **Docker slow/hangs** | x86 emulation on ARM64 Macs is slow. Consider using a native x86_64 Linux host.                  |
 | **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow.   |
 | **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.       |
 
