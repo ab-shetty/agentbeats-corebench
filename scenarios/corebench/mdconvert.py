@@ -20,7 +20,6 @@ from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 import mammoth
 import markdownify
 import pandas as pd
-import pdfminer
 import pdfminer.high_level
 import pptx
 

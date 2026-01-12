@@ -555,21 +555,23 @@ def download_corebench_capsule(capsule_id: str, target_dir: str = "./scenarios/c
     logger.info(f"Downloading capsule {capsule_id}")
 
     if capsule_dir.exists():
-        return f"{capsule_id} already exists locally"
+        logger.info(f"{capsule_id} already exists locally")
+        return capsule_dir  # Return path, not message
 
     # Try Princeton
     ok, msg = _download_from_princeton(capsule_id, target_dir)
     if ok:
-        return msg
-    print(f"[corebench] Princeton failed: {msg}")
+        logger.info(msg)
+        return capsule_dir  # Return path, not message
+    
+    logger.warning(f"Princeton failed: {msg}")
 
-
-    # Fallback: Google Drive (only for this capsule if listed)
+    # Fallback: Google Drive
     gdrive_file_id = CAPSULE_LOOKUP.get(capsule_id)
     if gdrive_file_id:
         return download_capsule_from_gdrive(capsule_id, gdrive_file_id, target_dir)
 
-    return f"No download source available for {capsule_id}"
+    raise FileNotFoundError(f"No download source available for {capsule_id}")
 
 
 
@@ -1191,6 +1193,11 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # Rename to environment directory
         capsule_path = os.path.join(self._workspace_dir, task_id)
 
+        # Ensure env_dir doesn't exist before renaming
+        if os.path.exists(env_dir):
+            logger.warning(f"Environment directory already exists, removing it first")
+            shutil.rmtree(env_dir)
+
         logger.debug(f"Renaming {capsule_path} to {env_dir}")
         os.rename(capsule_path, env_dir)
         
@@ -1785,13 +1792,10 @@ def test_download_capsules():
         logger.info(f"Downloading capsule {capsule_id}...")
         try:
             result_path = download_corebench_capsule(capsule_id, target_dir=workspace_dir)
-            if os.path.exists(result_path):
-                logger.info(f"✅ Capsule {capsule_id} downloaded successfully at: {result_path}")
-            else:
-                logger.error(f"❌ Capsule {capsule_id} download returned path but folder not found: {result_path}")
+            if result_path.exists():  # Now works correctly
+                logger.info(f"✅ Capsule {capsule_id} downloaded at: {result_path}")
         except Exception as e:
             logger.error(f"❌ Failed to download capsule {capsule_id}: {e}")
-
 
 
 if __name__ == "__main__":
