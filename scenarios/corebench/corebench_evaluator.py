@@ -596,7 +596,7 @@ def get_tasks(task_set_name: str) -> list[dict]:
     return dataset
 
 
-def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional[int] = None) -> list[dict]:
+def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional[int] = None, task_index: Optional[int] = None) -> list[dict]:
     """
     Select which tasks to run for this evaluation session.
 
@@ -609,7 +609,7 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
     task_set_name = domain
     task_split_name = "base"
     
-    logger.info(f"Getting task IDs for domain: {domain}, task_ids: {task_ids}, num_tasks: {num_tasks}")
+    logger.info(f"Getting task IDs for domain: {domain}, task_ids: {task_ids}, num_tasks: {num_tasks}, task_index: {task_index}")
     
     tasks = get_tasks(task_set_name=task_set_name)
     
@@ -624,6 +624,10 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
     # Further limit by num_tasks if provided
     if num_tasks is not None:
         selected_tasks = selected_tasks[:num_tasks]
+    
+    # Select specific task by index if provided
+    if task_index is not None and 0 <= task_index < len(selected_tasks):
+        selected_tasks = [selected_tasks[task_index]]
     
     logger.info(f"Selected {len(selected_tasks)} tasks")
     return selected_tasks
