@@ -342,12 +342,12 @@ def get_tasks(task_set_name):
     return dataset
 
 
-def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional[int] = None) -> list[str]:
-    """Get task IDs for the domain, optionally limited to num_tasks."""
+def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional[int] = None, task_index: Optional[int] = None) -> list[str]:
+    """Get task IDs for the domain, optionally limited to num_tasks or a specific task_index."""
     task_set_name = domain
     task_split_name = "base"
     
-    logger.info(f"Getting task IDs for domain: {domain}, num_tasks: {num_tasks}")
+    logger.info(f"Getting task IDs for domain: {domain}, num_tasks: {num_tasks}, task_index: {task_index}")
     
     if task_ids is None:
         tasks = get_tasks(task_set_name=task_set_name)
@@ -356,9 +356,18 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
 
     result = tasks
     if num_tasks is not None:
-        result = result[:num_tasks]
+        if task_index is not None:
+            # Select only the task at the specified index
+            logger.info(f"Selecting single task at index {task_index}")
+            if task_index >= len(tasks):
+                logger.error(f"Task index {task_index} out of range (only {len(tasks)} tasks available)")
+                return []
+            result = [tasks[task_index]]
+        else:
+            # Select first num_tasks tasks
+            result = result[:num_tasks]
     
-    logger.info(f"Selected {len(result)} tasks")
+    logger.info(f"Selected {len(result)} task(s)")
     return result
 
 
@@ -476,12 +485,15 @@ class CoreBenchEvaluator(GreenAgent):
         domain = req.config["domain"]
         task_ids = req.config.get("task_ids", None)
         num_tasks = req.config.get("num_tasks", None)
+        task_index = req.config.get("task_index", None)
         max_steps = req.config.get("max_steps", 200)
         user_llm = req.config.get("user_llm", "openai/gpt-5-mini")
         user_llm_args = req.config.get("user_llm_args", {})
         
         logger.info(f"Domain: {domain}")
         logger.info(f"Num tasks: {num_tasks}")
+        if task_index is not None:
+            logger.info(f"Task index: {task_index}")
         logger.info(f"Max steps: {max_steps}")
         
         # MCP server configuration
@@ -508,7 +520,7 @@ class CoreBenchEvaluator(GreenAgent):
             self._reset_workspace()
 
         # Get task IDs
-        resolved_task_ids = get_task_ids(domain, task_ids, num_tasks)
+        resolved_task_ids = get_task_ids(domain, task_ids, num_tasks, task_index)
         logger.info(f"Running {len(resolved_task_ids)} tasks for domain {domain}")
 
         await updater.update_status(
