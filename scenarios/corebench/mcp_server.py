@@ -33,25 +33,36 @@ def execute_bash(command: str) -> str:
     Returns:
         Command output with exit code, stdout, and stderr
     """
+    timeout_seconds = 900 # 15 min - needed for TensorFlow on ARM64/QEMU emulation
     try:
         result = subprocess.run(
             command, 
-            shell=True, 
+            shell=True,
+            executable="/bin/bash",
             capture_output=True, 
             text=True,
-            timeout=500
+            timeout=timeout_seconds,
         )
         output = f"Exit Code: {result.returncode}\nStdout:\n{result.stdout}\nStderr:\n{result.stderr}"
         
-        # Limit output to 1000 tokens
+        # Limit output to 1000 tokens (keep both head and tail for better error visibility)
         encoding = tiktoken.get_encoding("cl100k_base")
         tokens = encoding.encode(output)
-        if len(tokens) > 1000:
-            output = encoding.decode(tokens[:1000]) + "\n... (output truncated to 1000 tokens)"
+        max_tokens = 1000
+        if len(tokens) > max_tokens:
+            head_tokens = max_tokens // 2
+            tail_tokens = max_tokens - head_tokens
+            head = tokens[:head_tokens]
+            tail = tokens[-tail_tokens:]
+            output = (
+                encoding.decode(head)
+                + "\n... (output truncated; showing head and tail)\n"
+                + encoding.decode(tail)
+            )
         
         return output
     except subprocess.TimeoutExpired:
-        return "Error: Command timed out after 30 seconds"
+        return f"Error: Command timed out after {timeout_seconds} seconds"
     except Exception as e:
         return f"Error executing command: {str(e)}"
 
@@ -124,7 +135,11 @@ def query_vision_language_model(query: str, image_path: str) -> str:
         # Check if the image file exists
         if not os.path.exists(image_path):
             return f"Error: Image file not found at {image_path}"
-        
+        # get the vision API key
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            return "Error: OPENAI_API_KEY is not set (required for gpt-5-mini vision requests)."
+
         # Read and encode the image
         with open(image_path, "rb") as image_file:
             image_content = image_file.read()
@@ -145,6 +160,8 @@ def query_vision_language_model(query: str, image_path: str) -> str:
         # Create the message with text and image
         response = litellm.completion(
             model="gpt-5-mini",
+            api_base="https://api.openai.com/v1",
+            api_key=openai_api_key,
             messages=[
                 {
                     "role": "user",
@@ -584,3 +601,4 @@ def python_interpreter(code: str) -> str:
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+        

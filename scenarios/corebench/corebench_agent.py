@@ -14,6 +14,7 @@ import argparse
 import json
 import re
 import sys
+import os
 import logging
 import traceback
 from typing import Optional
@@ -47,6 +48,19 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("a2a").setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+# Configuration:
+# - Model priority: CLI --model > COREBENCH_TEXT_MODEL env > default
+# - If COREBENCH_TEXT_API_BASE is set in .env → self-hosted vLLM (OpenAI-compatible)
+# - Otherwise → Nebius API (prepend "nebius/" to model)
+DEFAULT_MODEL = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
+TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or os.getenv("NEBIUS_API_KEY") or "").strip()
+
+# Will be set in main() after CLI parsing
+TEXT_MODEL: str = DEFAULT_MODEL
 
 
 # =========================
@@ -64,18 +78,32 @@ IMPORTANT RULES:
 - You must NEVER execute tools yourself
 - You must NEVER assume tool results
 - You may only REQUEST tool usage using JSON
+- Respond with EXACTLY ONE action per turn
+
+CRITICAL - ANSWER FORMAT:
+- When reporting numeric values, copy them EXACTLY as they appear in the output
+- Do NOT convert between decimal (0.96) and percentage (96%) formats
+- If output shows "96.12", submit 96.12 (not 0.9612)
+- Always preserve the exact precision and scale from the source
+
+RESPONSE FORMAT:
+You must output ONLY a JSON object wrapped in <json>...</json> tags. No extra text.
 
 To use a tool, respond with:
 <json>
-{"name": "tool_name", "arguments": {...}}
+{
+    "name": "tool_name", 
+    "arguments": {...}
+}
 </json>
 
-To respond directly:
+To provide the final answer, respond with:
 <json>
-{"name": "respond", "arguments": {"content": "..."}}
+{
+    "name": "FINAL_ANSWER", 
+    "arguments": {"content": {"question text here": answer}}
+}
 </json>
-
-You may only do ONE action per turn.
 """
 
 
@@ -92,29 +120,68 @@ class CoreBenchPurpleAgent(AgentExecutor):
     def __init__(self):
         self.ctx_id_to_messages: dict[str, list[dict]] = {}
 
+    def _completion_kwargs(self, messages: list[dict]) -> dict:
+        """
+        Build litellm.completion kwargs.
+        
+        If COREBENCH_TEXT_API_BASE is set → use self-hosted vLLM (OpenAI-compatible)
+        Otherwise → use Nebius API (prepend "nebius/" to model)
+        """
+        if TEXT_API_BASE:
+            # Self-hosted vLLM: OpenAI-compatible endpoint
+            model = TEXT_MODEL
+            if not model.startswith("openai/"):
+                model = f"openai/{model}"
+            return {
+                "model": model,
+                "messages": messages,
+                "api_base": TEXT_API_BASE,
+                "api_key": TEXT_API_KEY or "dummy",
+            }
+        else:
+            # Nebius API: prepend "nebius/" to model name
+            model = TEXT_MODEL
+            if not model.startswith("nebius/"):
+                model = f"nebius/{model}"
+            return {"model": model, "messages": messages}
+
     # -------------------------
     # Utility: parse tool call
     # -------------------------
     def _parse_tool_call(self, text: str) -> Optional[dict]:
-        
+        # Try <json>...</json> tags first
         match = re.search(r"<json>\s*(.*?)\s*</json>", text, re.DOTALL)
         if match:
             try:
-                result = json.loads(match.group(1))
-                return result
+                return json.loads(match.group(1))
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse JSON from <json> tags: {e}")
                 logger.debug(f"JSON string was: {match.group(1)[:500]}")
                 return None
 
+        # Try markdown code blocks
         match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
             try:
-                result = json.loads(match.group(1))
-                return result
+                return json.loads(match.group(1))
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse JSON from code block: {e}")
                 return None
+
+        # Try parsing entire response as JSON
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Last resort: search for JSON object in text
+        for pattern in [r"\{.*?\}", r"\{.*\}"]:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    continue
 
         logger.warning("No JSON found in response")
         return None
@@ -131,7 +198,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         logger.info(f"Input length: {len(user_input)} chars")
         logger.debug(f"Full input: {user_input}")
 
-        # Initialize conversation
+        # Initialize purple agent conversation
         if context.context_id not in self.ctx_id_to_messages:
             logger.info("Initializing new conversation with system prompt")
             self.ctx_id_to_messages[context.context_id] = [
@@ -155,16 +222,13 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # "openai/gpt-5-mini"
                 # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 logger.info("Calling LLM:")
-                response = completion(
-                    model="nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct",
-                    messages=messages,
-                )
+                response = completion(**self._completion_kwargs(messages))
 
                 # Log the response details
                 logger.debug(f"LLM Response object: {response}")
                 logger.debug(f"Response choices: {response.choices if hasattr(response, 'choices') else 'No choices'}")
                 
-                # Check if response has the expected structure
+                # Check if response has the expected JSON structure
                 if not hasattr(response, 'choices') or not response.choices:
                     logger.error("LLM response has no choices!")
                     logger.error(f"Response type: {type(response)}")
@@ -216,10 +280,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         
                         # Call LLM again
                         logger.info("Calling LLM again for actual tool call")
-                        response = completion(
-                            model="nebius/openai/gpt-oss-120b",
-                            messages=messages,
-                        )
+                        response = completion(**self._completion_kwargs(messages))
                         
                         assistant_content = response.choices[0].message.content
                         if assistant_content is None:
@@ -240,16 +301,26 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # Check for structured JSON tool intent
                 tool_call = self._parse_tool_call(assistant_content)
 
-                if tool_call is None:
-                    # Plain text response (allowed but discouraged)
-                    logger.warning("No structured tool call found, sending plain text response")
-                    await event_queue.enqueue_event(
-                        new_agent_text_message(
-                            assistant_content,
-                            context_id=context.context_id,
-                        )
-                    )
-                    return
+                if (
+                    tool_call is None                       # parsing failed
+                    or not isinstance(tool_call, dict)      # parsed but wrong type
+                    or "name" not in tool_call              # missing required field
+                    or "arguments" not in tool_call         # missing required field
+                    or not isinstance(tool_call.get("arguments"), dict)  # arguments not a dict
+                ):
+                    logger.warning("No valid structured tool call found; reprompting for JSON-only output")
+                    messages.append({
+                        "role": "user",
+                        "content": """Your previous response was NOT a valid tool call.
+
+Reply with ONLY a JSON object wrapped in <json>...</json> tags. No extra text.
+
+Example:
+<json>
+{"name": "execute_bash", "arguments": {"command": "ls"}}
+</json>"""
+                    })
+                    continue
 
                 # Always forward tool intent verbatim
                 formatted = "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
@@ -262,6 +333,11 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     )
                 )
                 logger.info("Response sent successfully")
+                
+                # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
+                # Without this, ctx_id_to_messages grows indefinitely across capsules.
+                if tool_call.get("name") == "FINAL_ANSWER":
+                    self.ctx_id_to_messages.pop(context.context_id, None)
                 return
 
             except Exception as e:
@@ -272,12 +348,28 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 await event_queue.enqueue_event(
                     new_agent_text_message(
                         "<json>\n"
-                        '{"name": "respond", "arguments": {"content": "I encountered an error."}}\n'
+                        '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
                         "</json>",
                         context_id=context.context_id,
                     )
                 )
+                # Cleanup: Free memory after error fallback
+                self.ctx_id_to_messages.pop(context.context_id, None)
                 return
+
+        # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
+        logger.error("Exhausted max turns without producing a valid JSON tool call so returning empty FINAL_ANSWER")
+        await event_queue.enqueue_event(
+            new_agent_text_message(
+                "<json>\n"
+                '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
+                "</json>",
+                context_id=context.context_id,
+            )
+        )
+        # Cleanup: Free memory after max_turns fallback
+        self.ctx_id_to_messages.pop(context.context_id, None)
+        return
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise NotImplementedError
@@ -313,11 +405,21 @@ def prepare_agent_card(url: str) -> AgentCard:
 # =========================
 
 def main():
+    global TEXT_MODEL
+    
     parser = argparse.ArgumentParser("Run CoreBench Purple Agent")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9019)
     parser.add_argument("--card-url")
+    parser.add_argument(
+        "--model", "-m",
+        default=None,
+        help=f"LLM model to use. Priority: CLI > COREBENCH_TEXT_MODEL in .env > default ({DEFAULT_MODEL})"
+    )
     args = parser.parse_args()
+    
+    # Resolve model: CLI > ENV > default
+    TEXT_MODEL = args.model or os.getenv("COREBENCH_TEXT_MODEL") or DEFAULT_MODEL
 
     # Setup shared logging
     log_file = setup_logging("purple_agent")
@@ -325,6 +427,11 @@ def main():
     logger.info(f"Starting CoreBench Purple Agent")
     logger.info(f"Host: {args.host}, Port: {args.port}")
     logger.info(f"Log file: {log_file}")
+    logger.info(f"Text model: {TEXT_MODEL}")
+    if TEXT_API_BASE:
+        logger.info(f"Using self-hosted vLLM at: {TEXT_API_BASE}")
+    else:
+        logger.info("Using Nebius API")
 
     card_url = args.card_url or f"http://{args.host}:{args.port}/"
     card = prepare_agent_card(card_url)
