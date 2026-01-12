@@ -35,6 +35,12 @@ import uvicorn
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
+import urllib.request
+import tarfile
+import zipfile
+import socket
+import gdown
+
 load_dotenv()
 
 from a2a.server.apps import A2AStarletteApplication
@@ -340,7 +346,7 @@ class SimpleMCPClient:
         
         return self
     
-    async def _send_request(self, method: str, params: dict, timeout: float = 510.0) -> dict:
+    async def _send_request(self, method: str, params: dict, timeout: float = 1000.0) -> dict:
         """Send a JSON-RPC request and get response.
         
         Args:
@@ -451,82 +457,118 @@ def mcp_tools_to_str(mcp_tools: list) -> str:
         tool_list.append(tool_dict)
     return json.dumps(tool_list, indent=2)
 
+# ----------------------
+# Load manifest once
+# ----------------------
+# Manifest JSON example:
+# [
+#  {"capsule_id": "capsule-3560168", "gdrive_file_id": "1vZK3IitSvqu_Ic3zrcviJ1aojYX6lpUY"},
+# ]
 
-def download_corebench_capsule(
-    capsule_id: str,
-    target_dir: str = "./scenarios/corebench/capsules"
-) -> str:
-    """Download and extract a CoreBench capsule from the repository."""
-    import urllib.request
-    import tarfile
-    import time
-    import socket
-    from pathlib import Path
+HERE = Path(__file__).resolve().parent
+CAPSULE_EXTENSION_PATH = HERE / "capsule_extension.json"
+if not CAPSULE_EXTENSION_PATH.exists():
+    logger.warning(f"{CAPSULE_EXTENSION_PATH} does not exist — GDrive fallback will fail")
+
+with open(CAPSULE_EXTENSION_PATH) as f:
+    CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
+logger.info(f"Loaded {len(CAPSULE_LOOKUP)} capsules from manifest")
+
+# with open("./scenarios/corebench/capsule_extension.json") as f:
+#     CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
+
+
+# ----------------------
+# Helper: Princeton download
+# ----------------------
+def _download_from_princeton(capsule_id: str, capsules_dir: Path):
+    """
+    Try to download a capsule from Princeton CoreBench mirror.
+    Returns (success_flag: bool, message: str)
+    """
+    capsule_dir = capsules_dir / capsule_id
+    tar_path = capsules_dir / f"{capsule_id}.tar.gz"
+    capsule_url = f"https://corebench.cs.princeton.edu/capsules/{capsule_id}.tar.gz"
+
+    try:
+        socket.setdefaulttimeout(300)
+        logger.info(f"Downloading {capsule_id} from Princeton mirror...")
+        urllib.request.urlretrieve(capsule_url, tar_path)
+    except Exception as e:
+        # Likely 404 if capsule not in Princeton
+        return False, f"Capsule {capsule_id} not found in Princeton: {e}"
+
+    try:
+        logger.info(f"Extracting {capsule_id}...")
+        with tarfile.open(tar_path, "r:gz") as tar:
+            tar.extractall(capsules_dir)
+        tar_path.unlink()
+        return True, f"Downloaded capsule {capsule_id} from Princeton"
+    except Exception as e:
+        if tar_path.exists():
+            tar_path.unlink()
+        return False, f"Failed to extract Princeton capsule {capsule_id}: {e}"
+
+
+# ----------------------
+# Helper: Google Drive download
+# ----------------------
+def download_capsule_from_gdrive(capsule_id: str, gdrive_file_id: str, target_dir: Path):
+    """
+    Download a capsule ZIP from Google Drive and extract it
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    capsule_dir = target_dir / capsule_id
+    if capsule_dir.exists():
+        logger.info(f"{capsule_id} already exists at {capsule_dir}")
+        return capsule_dir
+
+    zip_path = target_dir / f"{capsule_id}.zip"
+    url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+
+    logger.info(f"Downloading {capsule_id} from Google Drive...")
+    gdown.download(url, str(zip_path), quiet=False)
+
+    logger.info(f"Extracting {capsule_id}...")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(capsule_dir)
+
+    zip_path.unlink()
+    logger.info(f"Downloaded and extracted {capsule_id} to {capsule_dir}")
+    return capsule_dir
+
+
+# ----------------------
+# Main: download single capsule (targeted)
+# ----------------------
+def download_corebench_capsule(capsule_id: str, target_dir: str = "./scenarios/corebench/capsules"):
+    """
+    Download a single CoreBench capsule (targeted):
+    1) Try Princeton mirror first
+    2) Fallback to Google Drive if listed in manifest
+    """
+    target_dir = Path(target_dir)
+    capsule_dir = target_dir / capsule_id
     
     logger.info(f"Downloading capsule {capsule_id}")
-    
-    try:
-        # Create target directory if it doesn't exist
-        capsules_dir = Path(target_dir)
-        capsules_dir.mkdir(parents=True, exist_ok=True)
-        
-        capsule_dir = capsules_dir / capsule_id
-        
-        # Check if already downloaded
-        if capsule_dir.exists():
-            logger.info(f"Capsule {capsule_id} already exists at {capsule_dir}")
-            return f"Capsule {capsule_id} already exists at {capsule_dir}"
-        
-        # Download URL and paths
-        capsule_url = f"https://corebench.cs.princeton.edu/capsules/{capsule_id}.tar.gz"
-        tar_path = capsules_dir / f"{capsule_id}.tar.gz"
-        
-        logger.debug(f"Download URL: {capsule_url}")
-        logger.debug(f"Tar path: {tar_path}")
-        
-        # Download with retry logic
-        max_retries = 5
-        backoff_factor = 1
-        
-        for attempt in range(1, max_retries + 1):
-            try:
-                logger.info(f"Downloading capsule {capsule_id} (attempt {attempt}/{max_retries})...")
-                socket.setdefaulttimeout(300)  # 5 minutes timeout
-                urllib.request.urlretrieve(capsule_url, tar_path)
-                logger.info(f"Download complete: {tar_path.stat().st_size} bytes")
-                break
-            except Exception as e:
-                logger.warning(f"Download attempt {attempt} failed: {e}")
-                if attempt == max_retries:
-                    logger.error(f"Failed to download capsule {capsule_id} after {max_retries} attempts")
-                    return f"Failed to download capsule {capsule_id} after {max_retries} attempts: {str(e)}"
-                
-                sleep_time = backoff_factor * (2 ** (attempt - 1))
-                logger.info(f"Retrying in {sleep_time}s...")
-                time.sleep(sleep_time)
-        
-        # Extract the archive
-        try:
-            logger.info(f"Extracting capsule {capsule_id}...")
-            with tarfile.open(tar_path, "r:gz") as tar:
-                tar.extractall(path=capsules_dir)
-            
-            # Remove tar file after successful extraction
-            tar_path.unlink()
-            logger.info(f"Extraction complete, tar file removed")
-            
-            return f"Successfully downloaded and extracted capsule {capsule_id} to {capsule_dir}"
-            
-        except Exception as e:
-            logger.error(f"Failed to extract capsule {capsule_id}: {e}")
-            if tar_path.exists():
-                tar_path.unlink()
-            return f"Failed to extract capsule {capsule_id}: {str(e)}"
-            
-    except Exception as e:
-        logger.error(f"Error downloading capsule {capsule_id}: {e}")
-        logger.debug(traceback.format_exc())
-        return f"Error downloading capsule {capsule_id}: {str(e)}"
+
+    if capsule_dir.exists():
+        return f"{capsule_id} already exists locally"
+
+    # Try Princeton
+    ok, msg = _download_from_princeton(capsule_id, target_dir)
+    if ok:
+        return msg
+    print(f"[corebench] Princeton failed: {msg}")
+
+
+    # Fallback: Google Drive (only for this capsule if listed)
+    gdrive_file_id = CAPSULE_LOOKUP.get(capsule_id)
+    if gdrive_file_id:
+        return download_capsule_from_gdrive(capsule_id, gdrive_file_id, target_dir)
+
+    return f"No download source available for {capsule_id}"
+
 
 
 def get_tasks(task_set_name: str) -> list[dict]:
@@ -605,6 +647,7 @@ class CoreBenchEvaluator(GreenAgent):
         self._mcp_client: Optional[SimpleMCPClient] = None
         self._mcp_tools = []
         self._workspace_dir = WORKSPACE_DIR
+        self._keep_environment = False
     
     def _reset_workspace(self) -> None:
         """
@@ -686,12 +729,12 @@ class CoreBenchEvaluator(GreenAgent):
         logger.info("Request validation passed")
         return True, "ok"
 
-    async def _init_mcp_client(self, mcp_server_command: list[str]) -> list:
+    async def _init_mcp_client(self, mcp_server_command: list[str], cwd: Optional[str] = None) -> list:
         """Initialize MCP client connection to a tool server."""
         try:
             logger.info(f"Initializing MCP client with command: {' '.join(mcp_server_command)}")
-            
-            self._mcp_client = SimpleMCPClient(mcp_server_command, cwd=self._workspace_dir)
+            effective_cwd = cwd or self._workspace_dir
+            self._mcp_client = SimpleMCPClient(mcp_server_command, cwd=effective_cwd)
             await self._mcp_client.connect()
             
             self._mcp_tools = self._mcp_client.tools
@@ -854,6 +897,7 @@ class CoreBenchEvaluator(GreenAgent):
         domain = req.config["domain"]
         task_ids = req.config.get("task_ids", None)
         num_tasks = req.config.get("num_tasks", None)
+        task_index = req.config.get("task_index", None)
         max_steps = req.config.get("max_steps", 200)
         
         # LLM-as-judge model configuration
@@ -868,12 +912,15 @@ class CoreBenchEvaluator(GreenAgent):
         
         logger.info(f"Domain: {domain}")
         logger.info(f"Num tasks: {num_tasks}")
+        if task_index is not None:
+            logger.info(f"Task index: {task_index}")
         logger.info(f"Max steps: {max_steps}")
         logger.info(f"Keep traces: {keep_traces}")
         
         # MCP server configuration
         use_mcp = req.config.get("use_mcp", False)
         mcp_server_command = req.config.get("mcp_server_command", ["uv", "run", "mcp", "run", "mcp_server.py"])
+        self._keep_environment = req.config.get("keep_environment", False)
         resolved_mcp_command = []
         for part in mcp_server_command:
             if isinstance(part, str) and part.endswith(".py") and not os.path.isabs(part):
@@ -894,22 +941,9 @@ class CoreBenchEvaluator(GreenAgent):
         if use_mcp:
             # Ensure workspace exists before starting MCP server
             self._reset_workspace()
-            try:
-                await self._init_mcp_client(resolved_mcp_command)
-                await updater.update_status(
-                    TaskState.working,
-                    new_agent_text_message(f"MCP client initialized with {len(self._mcp_tools)} tools")
-                )
-            except Exception as e:
-                logger.error(f"Failed to initialize MCP: {e}")
-                await updater.update_status(
-                    TaskState.failed,
-                    new_agent_text_message(f"Failed to initialize MCP: {str(e)}")
-                )
-                return
 
         # Get task IDs
-        resolved_task_ids = get_task_ids(domain, task_ids, num_tasks)
+        resolved_task_ids = get_task_ids(domain, task_ids, num_tasks, task_index)
         logger.info(f"Running {len(resolved_task_ids)} tasks for domain {domain}")
 
         await updater.update_status(
@@ -943,6 +977,7 @@ class CoreBenchEvaluator(GreenAgent):
                         use_mcp=use_mcp,
                         run_id=run_id,
                         keep_traces=keep_traces,
+                        mcp_server_command=resolved_mcp_command,
                     )
                     task_evaluations.append(task_evaluation)
                     logger.info(f"Task {task_id} completed: "
@@ -1092,6 +1127,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         max_steps: int,
         judge_llm: str,
         use_mcp: bool = True,
+        mcp_server_command: Optional[list[str]] = None,
         run_id: str = "",
         keep_traces: bool = False,
     ) -> TaskEvaluation:
@@ -1139,11 +1175,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.warning(f"Failed to initialize execution trace writer: {e}")
             trace = None
         
-        # Build the initial task description for the purple agent
-        logger.debug("Building task prompt")
-        task_description = self._build_task_prompt(task, domain, use_mcp)
-        logger.debug(f"Task description length: {len(task_description)} chars")
-        
         env_dir = os.path.join(self._workspace_dir, "environment")
         
         # Download capsule to workspace
@@ -1153,13 +1184,46 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
         # Rename to environment directory
         capsule_path = os.path.join(self._workspace_dir, task_id)
-        env_dir = os.path.join(self._workspace_dir, "environment")
-        
+
         logger.debug(f"Renaming {capsule_path} to {env_dir}")
         os.rename(capsule_path, env_dir)
+        
+
+        # Uncomment below to use cached capsules instead of downloading each time
+        # # Download capsule to cache directory
+        # logger.info(f"Downloading capsule {task_id}")
+        # capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
+        # download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
+        # logger.info(f"Download result: {download_result}")
+
+        # # Copy to environment directory (keep original capsule folder intact)
+        # capsule_path = os.path.join(capsules_dir, task_id)
+        # env_dir = os.path.join(self._workspace_dir, "environment")
 
         # Apply difficulty filters (and remember what we removed for restoration metrics).
         removed_by_difficulty_filters = self._apply_difficulty_filters(domain)
+
+        # Initialize MCP client after staging so PWD is workspace/environment
+        if use_mcp:
+            try:
+                await self._init_mcp_client(mcp_server_command or [], cwd=env_dir)
+                # Check docker availability via MCP. This is to distinguish agent error from docker error.
+                try:
+                    docker_check = await self._call_mcp_tool(
+                        "execute_bash",
+                        {"command": "docker --version || which docker || echo 'docker not found'"}
+                    )
+                    logger.info(f"Docker availability (MCP): {docker_check.strip()}")
+                except Exception as e:
+                    logger.warning(f"Docker availability check failed: {e}")
+            except Exception as e:
+                logger.error(f"Failed to initialize MCP: {e}")
+                raise
+
+        # Build the initial task description for the purple agent
+        logger.debug("Building task prompt")
+        task_description = self._build_task_prompt(task, domain, use_mcp)
+        logger.debug(f"Task description length: {len(task_description)} chars")
 
         # Start a new conversation with the purple agent
         next_message = task_description
@@ -1431,7 +1495,15 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         if os.path.exists(env_dir):
             shutil.rmtree(env_dir)
         logger.debug("Environment cleanup complete")
-
+        
+        # If MCP was used, disconnect the MCP server/client for this task
+        if use_mcp and self._mcp_client:
+            try:
+                await self._mcp_client.disconnect()
+            except Exception as e:
+                logger.error(f"Error cleaning up MCP client: {e}")
+            self._mcp_client = None
+        
         # Close trace file and optionally delete it
         if trace:
             trace_path = trace.jsonl_path
@@ -1448,17 +1520,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 logger.warning(f"Failed to cleanup execution trace: {e}")
         
         return evaluation
-
-    # =========================================================================
-    # DEPRECATED: Old metric methods removed - now using metrics.py module
-    # The following functionality has been moved to metrics.py:
-    # - __eval_result_json -> evaluate_accuracy()
-    # - _compute_task_completion_metrics -> (integrated into AccuracyMetrics)
-    # - _score_reproducability -> evaluate_reproducibility()
-    # - _compute_faithfulness_metrics -> evaluate_faithfulness() (LLM-as-judge)
-    # - _get_metrics -> aggregate_results()
-    # =========================================================================
-
+      
     def _build_task_prompt(self, task: dict, domain: str, use_mcp: bool = True) -> str:
         """Build the initial task prompt for the purple agent.
         
@@ -1707,6 +1769,25 @@ async def main():
     logger.info("Server starting...")
     await uvicorn_server.serve()
 
+def test_download_capsules():
+    workspace_dir = "./test_corebench_download"
+    os.makedirs(workspace_dir, exist_ok=True)
+    
+    capsule_ids = ["capsule-5507257", "capsule-3560168"]
+    
+    for capsule_id in capsule_ids:
+        logger.info(f"Downloading capsule {capsule_id}...")
+        try:
+            result_path = download_corebench_capsule(capsule_id, target_dir=workspace_dir)
+            if os.path.exists(result_path):
+                logger.info(f"✅ Capsule {capsule_id} downloaded successfully at: {result_path}")
+            else:
+                logger.error(f"❌ Capsule {capsule_id} download returned path but folder not found: {result_path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to download capsule {capsule_id}: {e}")
+
+
 
 if __name__ == "__main__":
     asyncio.run(main())
+    # test_download_capsules()

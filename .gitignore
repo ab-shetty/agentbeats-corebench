@@ -5,6 +5,7 @@
 capsules/
 __pycache__/
 *.pyc
+test_corebench_download/*
 scenarios/corebench/test_mcp_tools_client.py
 scenarios/corebench/test_mcp_tools_jsonrpc.py
 scenarios/corebench/test_mcp_tools_patterns.py
