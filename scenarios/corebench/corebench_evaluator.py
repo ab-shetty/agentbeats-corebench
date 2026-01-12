@@ -119,6 +119,7 @@ COMMON_CONSTRAINTS = [
 TOOL_CONSTRAINTS = [
     "File Reading: Use 'inspect_file_as_text' to read code, documentation, or text-based results.",
     "Vision: To analyze images (plots, charts, figures), use 'query_vision_language_model' with the image path.",
+    "Vision Questions: Questions starting with 'fig' or mentioning 'figure/plot/chart' typically REQUIRE using 'query_vision_language_model' on the relevant image file.",
     "Search: If you need external documentation, use 'web_search' sparingly.",
     "Shell State: The 'execute_bash' tool is STATELESS. 'cd' commands do NOT persist between calls. Use absolute paths (e.g. 'ls environment/results') or chain commands (e.g. 'cd environment && python run.py').",
     "Timeouts: Long-running commands may timeout. Break complex operations into smaller steps.",
@@ -137,6 +138,7 @@ MEDIUM_CONSTRAINTS = [
     "Existing Results: If results already exist in 'environment/results', read them before re-running code.",
     "Docker Preferred: If REPRODUCING.md mentions Docker, use the Docker command rather than installing dependencies manually.",
     "Output Location: After running code, check 'environment/results' or the working directory for output files.",
+    "Fallback: If local Python execution fails repeatedly, try using the Docker container described in REPRODUCING.md instead of giving up.",
 ]
 
 # Hard mode: no instructions, must infer from Dockerfile/README
