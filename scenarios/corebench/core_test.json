@@ -1161,6 +1161,44 @@
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.9005626.v1"
     },
+    {
+        "field": "Computer Science",
+        "language": "Python",
+        "capsule_title": "PM-Score-Net: A Disjoint-Label Multi-Task Learning Framework for Automated Continuous Severity Assessment of Myopic Maculopathy",
+        "capsule_id": "capsule-3762736",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "TAKES TOO LONG": "ignore for now; RUN LATER"
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.6713286.v2"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "R",
+        "capsule_title": "From Faces to Politics: Vision-Language Models (Sometimes) Link Visual Demographic Characteristics to Ideological Labels",
+        "capsule_id": "capsule-6791130",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "Fig based on Figure_F1.png, is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig based on Figure_B1.png, among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            },
+            {
+                "Fig based on Figure_F1.png, is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig based on Figure_B1.png, among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            },
+            {
+                "Fig based on Figure_F1.png, is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig based on Figure_B1.png, among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.3160992.v1"
+    },
+
 
     {
         "field": "",
@@ -1186,7 +1224,6 @@
 
 
 //  {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
- {"capsule_id": "capsule-8412128", "gdrive_file_id": "1BHZmNfRyEUO0vCflugOgmPUwLmWN-pJR"},
- {"capsule_id": "capsule-3762736", "gdrive_file_id": "1HwkStHqjeaUvEqLjQnoZKjWQRsQwnM7u"},
- {"capsule_id": "capsule-2242462",
+//  {"capsule_id": "capsule-3762736", "gdrive_file_id": "1HwkStHqjeaUvEqLjQnoZKjWQRsQwnM7u"},
+
 ]
