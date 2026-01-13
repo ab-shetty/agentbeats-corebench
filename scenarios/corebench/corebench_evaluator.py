@@ -306,13 +306,13 @@ class SimpleMCPClient:
         
         # Give server a moment to start
         await asyncio.sleep(2)
-        
+
         # Check if process is alive
         if self.process.poll() is not None:
             stderr_output = self.process.stderr.read() if self.process.stderr else ""
             logger.error(f"MCP server process died immediately. Stderr: {stderr_output}")
             raise RuntimeError("MCP server process died immediately")
-        
+
         logger.debug("MCP server process started, sending initialize request")
         
         # Send initialize request
@@ -917,13 +917,15 @@ class CoreBenchEvaluator(GreenAgent):
         
         user_llm_args = req.config.get("user_llm_args", {})
         keep_traces = req.config.get("keep_traces", False)  # Whether to keep trace files after run
-        
+        use_cache = req.config.get("use_cache", False)  # Whether to cache capsules for reuse
+
         logger.info(f"Domain: {domain}")
         logger.info(f"Num tasks: {num_tasks}")
         if task_index is not None:
             logger.info(f"Task index: {task_index}")
         logger.info(f"Max steps: {max_steps}")
         logger.info(f"Keep traces: {keep_traces}")
+        logger.info(f"Use cache: {use_cache}")
         
         # MCP server configuration
         use_mcp = req.config.get("use_mcp", False)
@@ -985,6 +987,7 @@ class CoreBenchEvaluator(GreenAgent):
                         use_mcp=use_mcp,
                         run_id=run_id,
                         keep_traces=keep_traces,
+                        use_cache=use_cache,
                         mcp_server_command=resolved_mcp_command,
                     )
                     task_evaluations.append(task_evaluation)
@@ -1138,20 +1141,23 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         mcp_server_command: Optional[list[str]] = None,
         run_id: str = "",
         keep_traces: bool = False,
+        use_cache: bool = False,
     ) -> TaskEvaluation:
         """
         Run a single task and return a complete TaskEvaluation.
-        
+
         This method orchestrates the full task lifecycle:
         1. Setup workspace and download capsule
         2. Interact with purple agent (tool calls loop)
         3. Evaluate all metrics (accuracy, reproducibility, faithfulness, adherence, efficiency)
         4. Cleanup and return structured evaluation
-        
+
         Args:
             judge_llm: LLM model name for LLM-as-judge evaluations (faithfulness, adherence)
-        Args:
             keep_traces: If True, trace files are kept after run. If False (default), deleted.
+            use_cache: If True, capsules are downloaded to a cache directory and copied to workspace.
+                      Subsequent runs reuse cached capsules. If False (default), capsules are
+                      downloaded directly to workspace each time.
         """
         import platform
         
@@ -1184,34 +1190,38 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             trace = None
         
         env_dir = os.path.join(self._workspace_dir, "environment")
-        
-        # Download capsule to workspace
-        logger.info(f"Downloading capsule {task_id}")
-        download_result = download_corebench_capsule(task_id, target_dir=self._workspace_dir)
-        logger.info(f"Download result: {download_result}")
 
-        # Rename to environment directory
-        capsule_path = os.path.join(self._workspace_dir, task_id)
-
-        # Ensure env_dir doesn't exist before renaming
+        # Ensure env_dir doesn't exist before setup
         if os.path.exists(env_dir):
             logger.warning(f"Environment directory already exists, removing it first")
             shutil.rmtree(env_dir)
 
-        logger.debug(f"Renaming {capsule_path} to {env_dir}")
-        os.rename(capsule_path, env_dir)
-        
+        if use_cache:
+            # Use caching: download to cache directory, then copy to workspace
+            capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
+            os.makedirs(capsules_dir, exist_ok=True)
+            cached_capsule_path = os.path.join(capsules_dir, task_id)
 
-        # Uncomment below to use cached capsules instead of downloading each time
-        # # Download capsule to cache directory
-        # logger.info(f"Downloading capsule {task_id}")
-        # capsules_dir = os.path.join(os.path.dirname(__file__), "capsules")
-        # download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
-        # logger.info(f"Download result: {download_result}")
+            if os.path.exists(cached_capsule_path):
+                logger.info(f"Found cached capsule {task_id}")
+            else:
+                logger.info(f"Downloading capsule {task_id} to cache")
+                download_result = download_corebench_capsule(task_id, target_dir=capsules_dir)
+                logger.info(f"Download result: {download_result}")
 
-        # # Copy to environment directory (keep original capsule folder intact)
-        # capsule_path = os.path.join(capsules_dir, task_id)
-        # env_dir = os.path.join(self._workspace_dir, "environment")
+            # Copy from cache to environment directory
+            logger.info(f"Copying cached capsule to workspace")
+            shutil.copytree(cached_capsule_path, env_dir)
+        else:
+            # Default behavior: download directly to workspace
+            logger.info(f"Downloading capsule {task_id} to workspace")
+            download_result = download_corebench_capsule(task_id, target_dir=self._workspace_dir)
+            logger.info(f"Download result: {download_result}")
+
+            # Rename to environment directory
+            capsule_path = os.path.join(self._workspace_dir, task_id)
+            logger.debug(f"Renaming {capsule_path} to {env_dir}")
+            os.rename(capsule_path, env_dir)
 
         # Apply difficulty filters (and remember what we removed for restoration metrics).
         removed_by_difficulty_filters = self._apply_difficulty_filters(domain)

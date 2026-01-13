@@ -7,6 +7,7 @@ import tiktoken
 import os
 import re
 import base64
+import sys
 from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
@@ -19,27 +20,80 @@ mcp = FastMCP("corebench-tools")
 # Initialize markdown converter for file inspection
 md_converter = MarkdownConverter()
 
+# SANDBOX: Restrict all file operations to this directory
+# This should be set to the current working directory when the MCP server starts
+# which is scenarios/corebench/workspace/environment
+SANDBOX_DIR = os.path.abspath(os.getcwd())
+# Print to stderr to avoid corrupting the JSON-RPC protocol on stdout
+print(f"[MCP Server] SANDBOX_DIR set to: {SANDBOX_DIR}", file=sys.stderr, flush=True)
+
+
+def _is_path_in_sandbox(path: str) -> bool:
+    """Check if a path is within the sandbox directory."""
+    try:
+        abs_path = os.path.abspath(os.path.join(SANDBOX_DIR, path))
+        return abs_path.startswith(SANDBOX_DIR)
+    except Exception:
+        return False
+
+
+def _sanitize_command(command: str) -> str:
+    """
+    Sanitize bash command to prevent directory escape.
+
+    This function:
+    1. Rewrites absolute paths referencing the sandbox to relative paths
+    2. Translates common root directory patterns (find /, ls /) to current directory
+    3. Ensures execution happens in SANDBOX_DIR
+    """
+    # Rewrite any explicit references to the sandbox directory to current directory
+    command = command.replace(SANDBOX_DIR, '.')
+
+    # Rewrite common absolute path patterns to relative equivalents
+    # This prevents agents from searching the entire filesystem
+
+    # find / → find .
+    command = re.sub(r'\bfind\s+/\s', 'find . ', command)
+    command = re.sub(r'\bfind\s+/$', 'find .', command)
+
+    # ls / → ls .
+    command = re.sub(r'\bls\s+/\s', 'ls . ', command)
+    command = re.sub(r'\bls\s+/$', 'ls .', command)
+
+    # Generic pattern: find /some/path → find .
+    # If they're searching any absolute path, make it search the sandbox instead
+    command = re.sub(r'\bfind\s+/[^\s]+', 'find .', command)
+
+    # Execute in sandbox directory
+    sanitized = f"cd '{SANDBOX_DIR}' && {command}"
+    return sanitized
+
 
 @mcp.tool()
 def execute_bash(command: str) -> str:
     """
     Execute a bash command and return its output.
+    All commands are sandboxed to run within the environment directory.
     Will not execute commands requiring internet access.
     Common linux and python packages are available via apt and pip.
-    
+
     Args:
         command: The bash command to execute
-    
+
     Returns:
         Command output with exit code, stdout, and stderr
     """
     timeout_seconds = 900 # 15 min - needed for TensorFlow on ARM64/QEMU emulation
+
+    # Sanitize the command to ensure it runs in the sandbox
+    sandboxed_command = _sanitize_command(command)
+
     try:
         result = subprocess.run(
-            command, 
+            sandboxed_command,
             shell=True,
             executable="/bin/bash",
-            capture_output=True, 
+            capture_output=True,
             text=True,
             timeout=timeout_seconds,
         )
@@ -72,36 +126,49 @@ def inspect_file_as_text(file_path: str, question: Optional[str] = None) -> str:
     """
     Read a file as markdown text and optionally ask questions about it.
     You cannot load files yourself: instead call this tool to read a file.
-    
-    Handles file extensions: .html, .htm, .xlsx, .pptx, .wav, .mp3, .m4a, .flac, 
-    .pdf, .docx, and all other types of text files, including files without extensions 
+    All file paths are restricted to the environment directory.
+
+    Handles file extensions: .html, .htm, .xlsx, .pptx, .wav, .mp3, .m4a, .flac,
+    .pdf, .docx, and all other types of text files, including files without extensions
     (which are treated as text files). IT DOES NOT HANDLE IMAGES.
-    
+
     Args:
-        file_path: The path to the file you want to read as text. Can be a file with 
-                   an extension (like '.pdf') or without an extension (treated as text file). 
+        file_path: The path to the file you want to read as text. Can be a file with
+                   an extension (like '.pdf') or without an extension (treated as text file).
                    If it is an image, use the query_vision_language_model tool instead!
                    DO NOT use this tool for an HTML webpage: use web search tools instead!
         question: Optional question about the file. If not provided, returns raw content.
-    
+
     Returns:
         File content or answer to question about the file
     """
     try:
+        # Resolve the file path relative to sandbox
+        if os.path.isabs(file_path):
+            # If absolute path, check if it's within sandbox
+            abs_file_path = os.path.abspath(file_path)
+        else:
+            # If relative path, resolve relative to sandbox
+            abs_file_path = os.path.abspath(os.path.join(SANDBOX_DIR, file_path))
+
+        # Verify path is within sandbox
+        if not abs_file_path.startswith(SANDBOX_DIR):
+            return f"Error: Access denied. File path must be within the environment directory: {file_path}"
+
         # Check if it's an image file
         if file_path[-4:] in [".png", ".jpg", ".jpeg", ".gif", ".bmp"]:
             return "Error: Cannot use inspect_file_as_text tool with images. Use query_vision_language_model instead!"
-        
+
         # Check if the file has no extension
-        _, file_extension = os.path.splitext(file_path)
+        _, file_extension = os.path.splitext(abs_file_path)
         if not file_extension:
             # Treat files without extensions as text files
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(abs_file_path, 'r', encoding='utf-8', errors='replace') as f:
                 text_content = f.read()
             result = DocumentConverterResult(title=None, text_content=text_content)
         else:
             # Normal conversion for files with extensions using mdconvert
-            result = md_converter.convert(file_path)
+            result = md_converter.convert(abs_file_path)
         
         # For zip files or if no question, return raw content
         if ".zip" in file_path or not question:
@@ -123,17 +190,28 @@ def query_vision_language_model(query: str, image_path: str) -> str:
     """
     Query a vision language model with text and an image.
     Use this tool to analyze images, charts, diagrams, screenshots, etc.
-    
+    All file paths are restricted to the environment directory.
+
     Args:
         query: The text query or question to ask about the image
         image_path: Path to the image file to analyze
-    
+
     Returns:
         The vision language model's response about the image
     """
     try:
+        # Resolve the file path relative to sandbox
+        if os.path.isabs(image_path):
+            abs_image_path = os.path.abspath(image_path)
+        else:
+            abs_image_path = os.path.abspath(os.path.join(SANDBOX_DIR, image_path))
+
+        # Verify path is within sandbox
+        if not abs_image_path.startswith(SANDBOX_DIR):
+            return f"Error: Access denied. File path must be within the environment directory: {image_path}"
+
         # Check if the image file exists
-        if not os.path.exists(image_path):
+        if not os.path.exists(abs_image_path):
             return f"Error: Image file not found at {image_path}"
         # get the vision API key
         openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -141,12 +219,12 @@ def query_vision_language_model(query: str, image_path: str) -> str:
             return "Error: OPENAI_API_KEY is not set (required for gpt-5-mini vision requests)."
 
         # Read and encode the image
-        with open(image_path, "rb") as image_file:
+        with open(abs_image_path, "rb") as image_file:
             image_content = image_file.read()
             base64_image = base64.b64encode(image_content).decode("utf-8")
-        
+
         # Determine image format from extension
-        ext = os.path.splitext(image_path)[1].lower()
+        ext = os.path.splitext(abs_image_path)[1].lower()
         format_map = {
             '.jpg': 'jpeg',
             '.jpeg': 'jpeg',
@@ -190,35 +268,37 @@ def query_vision_language_model(query: str, image_path: str) -> str:
 
 @mcp.tool()
 def file_content_search(
-    query: str, 
+    query: str,
     exclude_pattern: str = "*.pyc,*.git*,__pycache__,*.bin,*.exe,*.dll,*.so"
 ) -> str:
     """
-    Search files in the current directory and subdirectories for specific content.
+    Search files in the environment directory and subdirectories for specific content.
     This will only search the content of files, not the filenames themselves.
-    
+    All searches are restricted to the environment directory.
+
     Args:
         query: The search term or regex pattern to look for
         exclude_pattern: Comma-separated file patterns to exclude from search
-    
+
     Returns:
         Matching passages with file paths and line numbers
     """
     if not query.strip():
         return "Error: Empty search pattern. Please provide a valid search term."
-    
+
     results = []
     matches_found = 0
     files_searched = 0
-    
+
     context_lines = 3
     max_matches = 10
     max_files = 50
-    
+
     exclude_patterns = exclude_pattern.split(',') if exclude_pattern else []
-    
+
     try:
-        all_files = list(Path('.').rglob('*'))
+        # Search only within the sandbox directory
+        all_files = list(Path(SANDBOX_DIR).rglob('*'))
         
         files_to_search = []
         for file_path in all_files:
@@ -294,7 +374,8 @@ def edit_file(
 ) -> str:
     """
     Edit files in the project with various operations.
-    
+    All file paths are restricted to the environment directory.
+
     Args:
         command: One of 'view', 'create', 'str_replace', 'insert', 'delete'
         path: Path to the file to edit
@@ -302,10 +383,10 @@ def edit_file(
         line_number: Line number for insert/delete operations (1-indexed)
         old_str: String to replace when using str_replace (must be exact match)
         new_str: New string for replacement when using str_replace
-    
+
     Returns:
         Success or error message
-    
+
     Examples:
         - View: edit_file(command="view", path="test.py")
         - Create: edit_file(command="create", path="new.py", content="print('hello')")
@@ -313,7 +394,17 @@ def edit_file(
         - Insert: edit_file(command="insert", path="test.py", line_number=5, content="new line")
         - Delete: edit_file(command="delete", path="test.py", line_number=5)
     """
-    path = Path(path)
+    # Resolve the file path relative to sandbox
+    if os.path.isabs(path):
+        abs_path = Path(os.path.abspath(path))
+    else:
+        abs_path = Path(os.path.abspath(os.path.join(SANDBOX_DIR, path)))
+
+    # Verify path is within sandbox
+    if not str(abs_path).startswith(SANDBOX_DIR):
+        return f"Error: Access denied. File path must be within the environment directory: {path}"
+
+    path = abs_path
     
     try:
         if command == "view":
