@@ -1139,25 +1139,29 @@
         "capsule_doi": "https://doi.org/10.24433/CO.4976589.v1"
     },
     {
-        "field": "",
-        "language": "",
-        "capsule_title": "",
-        "capsule_id": "capsule-",
-        "task_prompt": "Run the run file and report on the output results.",
+        "field": "Social Sciences",
+        "language": "Python",
+        "capsule_title": "The Sovereign Constitution Fabric (SNF) v2.0 — Reproducible Synthetic-Floor Capsule",
+        "capsule_id": "capsule-8412128",
+        "task_prompt": "Run the run file and report on the result metrics.",
         "results": [
             {
-                "Implied per-capita median $ per person?": 6003.03
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
             },
             {
-                "Implied per-capita median $ per person?": 6003.03
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
             },
             {
-                "Implied per-capita median $ per person?": 6003.03
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
             }
 
         ],
-        "capsule_doi": ""
+        "capsule_doi": "https://doi.org/10.24433/CO.9005626.v1"
     },
+
     {
         "field": "",
         "language": "",
@@ -1182,7 +1186,6 @@
 
 
 //  {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
- {"capsule_id": "capsule-5564427", "gdrive_file_id": "1rCeVfe9bv8NjBZ_y90JSLeKDPbdm9wsY"},
  {"capsule_id": "capsule-8412128", "gdrive_file_id": "1BHZmNfRyEUO0vCflugOgmPUwLmWN-pJR"},
  {"capsule_id": "capsule-3762736", "gdrive_file_id": "1HwkStHqjeaUvEqLjQnoZKjWQRsQwnM7u"},
  {"capsule_id": "capsule-2242462",
