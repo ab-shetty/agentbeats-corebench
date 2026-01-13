@@ -1066,13 +1066,56 @@
             }
 
         ],
-        "capsule_doi": "https://codeocean.com/capsule/4977619/tree/v1"
+        "capsule_doi": "https://doi.org/10.24433/CO.4544914.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python",
+        "capsule_title": "A Predictive Analytics Framework for Early-Stage Thyroid Cancer Using ML",
+        "capsule_id": "capsule-7800694",
+        "task_prompt": "Run the run file and report on the generated html results.",
+        "results": [
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            },
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            },
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2418823.v1"
+    },
+
+
+    {
+        "field": "",
+        "language": "",
+        "capsule_title": "",
+        "capsule_id": "capsule-",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            }
+
+        ],
+        "capsule_doi": ""
     },
 
 
 
-
- {"capsule_id": "capsule-4977619", "gdrive_file_id": "1lzln6vDwWTOo-Y6-DrRTSp0333bP8NUa"},
  {"capsule_id": "capsule-7800694", "gdrive_file_id": "1MX0w3MKqOMXf16h98epxgwvUtyGGBoo2"},
  {"capsule_id": "capsule-5558058", "gdrive_file_id": "18sLtupxyOefDGMLAeZ3Ts8hplZS47XNK"},
  {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
