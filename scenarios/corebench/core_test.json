@@ -1091,8 +1091,73 @@
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.2418823.v1"
     },
+    // {
+    //     "field": "Social Sciences",
+    //     "language": "R",
+    //     "capsule_title": "Mortality impacts of rainfall and sea level rise in a developing megacity",
+    //     "capsule_id": "capsule-5558058",
+    //     "task_prompt": "Run the run file and report on the output results.",
+    //     "results": [
+    //         {
+    //             "Implied per-capita median $ per person?": 6003.03
+    //         },
+    //         {
+    //             "Implied per-capita median $ per person?": 6003.03
+    //         },
+    //         {
+    //             "Implied per-capita median $ per person?": 6003.03
+    //         }
 
+    //     ],
+    //     "capsule_doi": "https://doi.org/10.24433/CO.2076316.v2"
+    // },
 
+    {
+        "field": "Medical Sciences",
+        "language": "Python",
+        "capsule_title": "CATegorical and PHenotypic Image SyntHetic LearnING (CATphising): An Alternative to Federated Learning in Medical Imaging",
+        "capsule_id": "capsule-6800638",
+        "task_prompt": "Run the run file and report on the output xlsx and ROC.png files.",
+        "results": [
+            {
+                "fig based on the Overall_ROC.png, which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            },
+            {
+                "fig based on the Overall_ROC.png, which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            },
+            {
+                "fig based on the Overall_ROC.png, which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.4976589.v1"
+    },
+    {
+        "field": "",
+        "language": "",
+        "capsule_title": "",
+        "capsule_id": "capsule-",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03
+            }
+
+        ],
+        "capsule_doi": ""
+    },
     {
         "field": "",
         "language": "",
@@ -1116,10 +1181,7 @@
 
 
 
- {"capsule_id": "capsule-7800694", "gdrive_file_id": "1MX0w3MKqOMXf16h98epxgwvUtyGGBoo2"},
- {"capsule_id": "capsule-5558058", "gdrive_file_id": "18sLtupxyOefDGMLAeZ3Ts8hplZS47XNK"},
- {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
- {"capsule_id": "capsule-6800638", "gdrive_file_id": "1Q9M8kVsvxor9D01uP4sp_UWyNLKpwKUU"},
+//  {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
  {"capsule_id": "capsule-5564427", "gdrive_file_id": "1rCeVfe9bv8NjBZ_y90JSLeKDPbdm9wsY"},
  {"capsule_id": "capsule-8412128", "gdrive_file_id": "1BHZmNfRyEUO0vCflugOgmPUwLmWN-pJR"},
  {"capsule_id": "capsule-3762736", "gdrive_file_id": "1HwkStHqjeaUvEqLjQnoZKjWQRsQwnM7u"},
