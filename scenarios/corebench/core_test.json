@@ -998,6 +998,63 @@
 
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.8174015.v1"
-    }
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python",
+        "capsule_title": "ContRIS: A Software Framework for Flexible Control of Reconfigurable Intelligent Surfaces",
+        "capsule_id": "capsule-2956799",
+        "task_prompt": "Run the run file and report on the generated csv numbers.",
+        "results": [
+            {
+                "What is step 10, power -30 result": -72.09910826772894
+            },
+            {
+                "What is step 10, power -30 result": -64.88802233892316
+            },
+            {
+                "What is step 10, power -30 result": -61.27466564077484
+            }
 
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.8174015.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python",
+        "capsule_title": "Progressive decoding of DNA-stored JPEG data with on-the-fly error correction",
+        "capsule_id": "capsule-1796796",
+        "task_prompt": "Run the run file and report on the headline portfolio results.",
+        "results": [
+            {
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
+            },
+            {
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
+            },
+            {
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.9425963.v1"
+    },
+
+
+
+
+ {"capsule_id": "capsule-1796796", "gdrive_file_id": "1bAgJv3jgv4rBU7ACoI3xxTXR1kArgrfA"},
+ {"capsule_id": "capsule-4136195", "gdrive_file_id": "1PQpQOfzUVv4oZ9Z6No-JjehOgA4XgYHN"},
+ {"capsule_id": "capsule-4977619", "gdrive_file_id": "1lzln6vDwWTOo-Y6-DrRTSp0333bP8NUa"},
+ {"capsule_id": "capsule-7800694", "gdrive_file_id": "1MX0w3MKqOMXf16h98epxgwvUtyGGBoo2"},
+ {"capsule_id": "capsule-5558058", "gdrive_file_id": "18sLtupxyOefDGMLAeZ3Ts8hplZS47XNK"},
+ {"capsule_id": "capsule-0152700", "gdrive_file_id": "1iuro8T04U_NcX9B_esoujni1ajJW2kx_"},
+ {"capsule_id": "capsule-6800638", "gdrive_file_id": "1Q9M8kVsvxor9D01uP4sp_UWyNLKpwKUU"},
+ {"capsule_id": "capsule-5564427", "gdrive_file_id": "1rCeVfe9bv8NjBZ_y90JSLeKDPbdm9wsY"},
+ {"capsule_id": "capsule-8412128", "gdrive_file_id": "1BHZmNfRyEUO0vCflugOgmPUwLmWN-pJR"},
+ {"capsule_id": "capsule-3762736", "gdrive_file_id": "1HwkStHqjeaUvEqLjQnoZKjWQRsQwnM7u"},
+ {"capsule_id": "capsule-2242462",
 ]
