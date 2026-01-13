@@ -10,8 +10,8 @@ endpoint = "http://127.0.0.1:9019"
 cmd = "python scenarios/corebench/corebench_agent.py --host 127.0.0.1 --port 9019"
 
 [config]
-domain = "corebench_medium"  # Options: corebench_easy, corebench_medium, corebench_hard
-num_tasks = 45                # Number of tasks to evaluate
+domain = "corebench_hard"  # Options: corebench_easy, corebench_medium, corebench_hard
+num_tasks = 2                # Number of tasks to evaluate
 # task_ids = ["capsule-3449234"]  # Optional: specify exact capsule IDs
 use_mcp = true
 mcp_server_command = ["uv", "run", "mcp", "run", "scenarios/corebench/mcp_server.py"]
