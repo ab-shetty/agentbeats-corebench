@@ -91,7 +91,7 @@ logger = logging.getLogger("evaluator")
 logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("a2a").setLevel(logging.INFO)
+logging.getLogger("a2a").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
@@ -395,7 +395,7 @@ class SimpleMCPClient:
     
     async def call_tool(self, tool_name: str, arguments: dict) -> str:
         """Call an MCP tool and return its result as text"""
-        logger.info(f"Calling MCP tool: {tool_name}")
+        logger.debug(f"Calling MCP tool: {tool_name}")
         
         response = await self._send_request("tools/call", {
             "name": tool_name,
@@ -418,7 +418,7 @@ class SimpleMCPClient:
             first_item = content[0]
             if isinstance(first_item, dict) and "text" in first_item:
                 result_text = first_item["text"]
-                logger.info(f"Tool {tool_name} returned {len(result_text)} chars")
+                logger.debug(f"Tool {tool_name} returned {len(result_text)} chars")
                 return result_text
             return str(first_item)
         
@@ -1347,8 +1347,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     url=agent_url,
                     new_conversation=is_first_message,
                 )
-                logger.info(f"Purple agent response length: {len(response)} chars")
-                logger.debug(f"Response preview: {response[:500]}...")
+                response_preview = response[:300] + "..." if len(response) > 300 else response
+                logger.info(f"Purple agent response ({len(response)} chars): {response_preview}")
+                logger.debug(f"Full response: {response}")
             except Exception as e:
                 logger.error(f"Failed to communicate with purple agent: {e}")
                 logger.debug(traceback.format_exc())
@@ -1402,7 +1403,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 continue
 
             if tool_result is not None:
-                logger.info(f"Tool executed via MCP, result length: {len(tool_result)} chars")
+                result_preview = tool_result[:300] + "..." if len(tool_result) > 300 else tool_result
+                logger.info(f"Tool result ({len(tool_result)} chars): {result_preview}")
+                logger.debug(f"Full tool result: {tool_result}")
                 tool_exec_index += 1
                 
                 # Capture tool result in trace (includes full_result for faithfulness eval)
@@ -1729,7 +1732,7 @@ The JSON must contain:
 **Rules:**
 - Use only ONE tool per response
 - Do NOT combine a tool call with a final answer
-- When including multi-line strings in JSON, escape newlines as `\\n`
+- When including multi-line strings in a JSON tool call's content, escape newlines as `\\n`
 
 ## Examples
 
@@ -1810,8 +1813,7 @@ Begin by exploring the environment to understand the task.
 
         tool_name = action.name
         arguments = action.arguments
-        logger.info(f"Parsed tool call: {tool_name}")
-        logger.debug(f"Arguments: {json.dumps(arguments, indent=2)}")
+        logger.debug(f"Parsed tool call: {tool_name}, arguments: {json.dumps(arguments, indent=2)}")
 
         if tool_name == RESPOND_ACTION_NAME:
             return action, None

@@ -47,7 +47,7 @@ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("a2a").setLevel(logging.INFO)
+logging.getLogger("a2a").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
@@ -323,8 +323,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         logger.error(f"Message: {message}")
                         raise ValueError("Assistant content is None")
                 
-                logger.info(f"LLM response length: {len(assistant_content)} chars")
-                logger.debug(f"Full LLM response: {assistant_content}")
+                response_preview = assistant_content[:300] + "..." if len(assistant_content) > 300 else assistant_content
+                logger.debug(f"LLM response ({len(assistant_content)} chars): {response_preview}")
 
                 messages.append(
                     {"role": "assistant", "content": assistant_content}
