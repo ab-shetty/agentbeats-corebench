@@ -52,12 +52,12 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 # Configuration:
-# - Model priority: CLI --model > COREBENCH_TEXT_MODEL env > default
-# - If COREBENCH_TEXT_API_BASE is set in .env → self-hosted vLLM (OpenAI-compatible)
-# - Otherwise → Nebius API (prepend "nebius/" to model)
-DEFAULT_MODEL = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+# - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
+# - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
+# - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
+DEFAULT_MODEL = "openai/gpt-5-nano"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
-TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or os.getenv("NEBIUS_API_KEY") or "").strip()
+TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
 # Will be set in main() after CLI parsing
 TEXT_MODEL: str = DEFAULT_MODEL
@@ -125,9 +125,9 @@ class CoreBenchPurpleAgent(AgentExecutor):
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """
         Build litellm.completion kwargs.
-        
-        If COREBENCH_TEXT_API_BASE is set → use self-hosted vLLM (OpenAI-compatible)
-        Otherwise → use Nebius API (prepend "nebius/" to model)
+
+        If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM with api_base/api_key
+        Otherwise → pass model to litellm as-is (provider prefix already included)
         """
         if TEXT_API_BASE:
             # Self-hosted vLLM: OpenAI-compatible endpoint
@@ -141,11 +141,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 "api_key": TEXT_API_KEY or "dummy",
             }
         else:
-            # Nebius API: prepend "nebius/" to model name
-            model = TEXT_MODEL
-            if not model.startswith("nebius/"):
-                model = f"nebius/{model}"
-            return {"model": model, "messages": messages}
+            # Pass model directly to litellm (provider prefix already in model name)
+            return {"model": TEXT_MODEL, "messages": messages}
 
     def _track_tokens(self, context_id: str, response) -> None:
         """Track tokens from a completion response."""
@@ -163,17 +160,15 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         f"total_output={self.ctx_id_to_tokens[context_id]['output_tokens']}")
 
     def _get_effective_model_name(self) -> str:
-        """Get the effective model name being used (with provider prefix)."""
+        """Get the effective model name being used."""
         if TEXT_API_BASE:
+            # Local vLLM uses openai/ prefix
             model = TEXT_MODEL
             if not model.startswith("openai/"):
                 model = f"openai/{model}"
             return model
         else:
-            model = TEXT_MODEL
-            if not model.startswith("nebius/"):
-                model = f"nebius/{model}"
-            return model
+            return TEXT_MODEL
 
     # -------------------------
     # Utility: parse tool call
@@ -451,32 +446,25 @@ def prepare_agent_card(url: str) -> AgentCard:
 
 def main():
     global TEXT_MODEL
-    
+
     parser = argparse.ArgumentParser("Run CoreBench Purple Agent")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9019)
     parser.add_argument("--card-url")
-    parser.add_argument(
-        "--model", "-m",
-        default=None,
-        help=f"LLM model to use. Priority: CLI > COREBENCH_TEXT_MODEL in .env > default ({DEFAULT_MODEL})"
-    )
     args = parser.parse_args()
-    
-    # Resolve model: CLI > ENV > default
-    TEXT_MODEL = args.model or os.getenv("COREBENCH_TEXT_MODEL") or DEFAULT_MODEL
+
+    # Resolve model: ENV > default
+    TEXT_MODEL = os.getenv("COREBENCH_TEXT_MODEL") or DEFAULT_MODEL
 
     # Setup shared logging
     log_file = setup_logging("purple_agent")
-    
+
     logger.info(f"Starting CoreBench Purple Agent")
     logger.info(f"Host: {args.host}, Port: {args.port}")
     logger.info(f"Log file: {log_file}")
-    logger.info(f"Text model: {TEXT_MODEL}")
+    logger.info(f"Model: {TEXT_MODEL}")
     if TEXT_API_BASE:
         logger.info(f"Using self-hosted vLLM at: {TEXT_API_BASE}")
-    else:
-        logger.info("Using Nebius API")
 
     card_url = args.card_url or f"http://{args.host}:{args.port}/"
     card = prepare_agent_card(card_url)
