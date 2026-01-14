@@ -30,7 +30,6 @@ import os
 import numpy as np
 from scipy.stats import t
 import math
-import gymnasium as gym
 import uvicorn
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
@@ -82,6 +81,8 @@ from metrics import (
     AggregateMetrics,
     _empty_accuracy_metrics,
 )
+
+from model_prices import MODEL_PRICES_DICT
 
 # Setup logging - will be initialized in main()
 logger = logging.getLogger("evaluator")
@@ -637,6 +638,32 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
     return selected_tasks
 
 
+def calculate_cost(model_name: str, input_tokens: int, output_tokens: int) -> Optional[float]:
+    """
+    Calculate cost in dollars based on model name and token counts.
+
+    Args:
+        model_name: Model name with provider prefix (e.g., "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct")
+        input_tokens: Total input/prompt tokens
+        output_tokens: Total output/completion tokens
+
+    Returns:
+        Cost in dollars, or None if model not found in price dictionary
+    """
+    if not model_name or model_name not in MODEL_PRICES_DICT:
+        logger.warning(f"Model '{model_name}' not found in MODEL_PRICES_DICT")
+        return None
+
+    prices = MODEL_PRICES_DICT[model_name]
+    prompt_price = prices.get("prompt_tokens", 0)
+    completion_price = prices.get("completion_tokens", 0)
+
+    cost = (input_tokens * prompt_price) + (output_tokens * completion_price)
+    logger.debug(f"Cost calculation: model={model_name}, input={input_tokens}, output={output_tokens}, "
+                f"prompt_price={prompt_price}, completion_price={completion_price}, cost=${cost:.6f}")
+    return cost
+
+
 class CoreBenchEvaluator(GreenAgent):
     """
     Green agent that evaluates a purple agent on CoreBench tasks with MCP tools via SimpleMCPClient.
@@ -961,8 +988,9 @@ class CoreBenchEvaluator(GreenAgent):
             new_agent_text_message(f"Starting evaluation of {len(resolved_task_ids)} tasks in {domain} domain")
         )
 
-        # Collect all task evaluations
+        # Collect all task evaluations and cost metadata
         task_evaluations: list[TaskEvaluation] = []
+        task_cost_metadata: list[Optional[Dict[str, Any]]] = []
         track_restoration = domain in ("corebench_medium", "corebench_hard")
 
         try:
@@ -977,7 +1005,7 @@ class CoreBenchEvaluator(GreenAgent):
                     new_agent_text_message(f"Running task {task_id}...")
                 )
                 try:
-                    task_evaluation = await self._run_single_task(
+                    task_evaluation, cost_meta = await self._run_single_task(
                         agent_url=agent_url,
                         domain=domain,
                         task=task,
@@ -991,6 +1019,7 @@ class CoreBenchEvaluator(GreenAgent):
                         mcp_server_command=resolved_mcp_command,
                     )
                     task_evaluations.append(task_evaluation)
+                    task_cost_metadata.append(cost_meta)
                     logger.info(f"Task {task_id} completed: "
                                f"accuracy={task_evaluation.accuracy.accuracy:.1%}, "
                                f"faithfulness={task_evaluation.faithfulness.score:.2f}")
@@ -1022,16 +1051,42 @@ class CoreBenchEvaluator(GreenAgent):
                         ),
                         submitted_answer={},
                         ground_truth=task.get("results", [{}]),
+                        task_cost=None,
                     )
                     task_evaluations.append(failed_eval)
+                    task_cost_metadata.append(None)  # No cost data for failed tasks
 
             # =====================================================================
             # AGGREGATE RESULTS
             # =====================================================================
             time_used = time.time() - start_time
-            
+
             aggregate = aggregate_results(task_evaluations)
-            
+
+            # Calculate cost efficiency (cost per task)
+            total_cost: Optional[float] = None
+            cost_efficiency: Optional[float] = None
+            total_input_tokens = 0
+            total_output_tokens = 0
+            model_used: Optional[str] = None
+
+            for cost_meta in task_cost_metadata:
+                if cost_meta:
+                    total_input_tokens += cost_meta.get("input_tokens", 0)
+                    total_output_tokens += cost_meta.get("output_tokens", 0)
+                    if cost_meta.get("cost") is not None:
+                        if total_cost is None:
+                            total_cost = 0.0
+                        total_cost += cost_meta["cost"]
+                    if model_used is None and cost_meta.get("model"):
+                        model_used = cost_meta["model"]
+
+            if total_cost is not None and aggregate.num_tasks > 0:
+                cost_efficiency = total_cost / aggregate.num_tasks
+                logger.info(f"Cost efficiency: ${cost_efficiency:.6f}/task (total: ${total_cost:.6f})")
+            else:
+                logger.warning("Could not calculate cost efficiency (no cost data available)")
+
             logger.info(f"=" * 80)
             logger.info(f"⭐ EVALUATION COMPLETE ⭐")
             logger.info(f"Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_rate:.1%})")
@@ -1051,7 +1106,8 @@ class CoreBenchEvaluator(GreenAgent):
                 "num_tasks": aggregate.num_tasks,
                 "num_successful": aggregate.num_successful,
                 "pass_rate": aggregate.pass_rate,
-                
+                "cost_efficiency": round(cost_efficiency, 4),  # Dollar cost per task
+
                 # Accuracy metrics
                 "mean_accuracy": aggregate.mean_accuracy,
                 "mean_written_accuracy": aggregate.mean_written_accuracy,
@@ -1075,7 +1131,13 @@ class CoreBenchEvaluator(GreenAgent):
                 # Meta
                 "total_time": time_used,
                 "used_mcp": use_mcp,
-                
+
+                # Cost tracking
+                "total_cost": total_cost,
+                "total_input_tokens": total_input_tokens,
+                "total_output_tokens": total_output_tokens,
+                "model_used": model_used,
+
                 # Per-task breakdown
                 "task_results": aggregate.task_results,
             }
@@ -1091,6 +1153,11 @@ class CoreBenchEvaluator(GreenAgent):
             if aggregate.mean_restoration_rate is not None:
                 restoration_line = f"Reproducibility: {aggregate.mean_restoration_rate:.1%}\n"
 
+            cost_line = ""
+            if cost_efficiency is not None:
+                cost_line = f"  Cost Efficiency: ${cost_efficiency:.6f}/task (total: ${total_cost:.4f})\n"
+                cost_line += f"  Tokens: {total_input_tokens:,} input, {total_output_tokens:,} output\n"
+
             summary = f"""\n⭐ CoreBench Benchmark Results ⭐
 Domain: {domain}
 Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_rate:.1%})
@@ -1105,7 +1172,7 @@ Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_
   Avg Steps: {aggregate.mean_steps:.1f}
   Avg Tool Calls: {aggregate.mean_tool_calls:.1f}
   Total Time: {time_used:.1f}s
-
+{cost_line}
 📋 Task Results:
 {task_results_str}
 
@@ -1142,9 +1209,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         run_id: str = "",
         keep_traces: bool = False,
         use_cache: bool = False,
-    ) -> TaskEvaluation:
+    ) -> tuple[TaskEvaluation, Optional[Dict[str, Any]]]:
         """
-        Run a single task and return a complete TaskEvaluation.
+        Run a single task and return a complete TaskEvaluation and cost metadata.
 
         This method orchestrates the full task lifecycle:
         1. Setup workspace and download capsule
@@ -1158,6 +1225,13 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             use_cache: If True, capsules are downloaded to a cache directory and copied to workspace.
                       Subsequent runs reuse cached capsules. If False (default), capsules are
                       downloaded directly to workspace each time.
+
+        Returns:
+            Tuple of (TaskEvaluation, cost_metadata) where cost_metadata contains:
+            - model: Model name used by purple agent
+            - input_tokens: Total input tokens used
+            - output_tokens: Total output tokens used
+            - cost: Total cost in dollars (None if model not in price dict)
         """
         import platform
         
@@ -1256,6 +1330,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         logger.debug(f"Message preview: {next_message[:500]}...")
 
         answer: Any = None
+        answer_metadata: Dict[str, Any] = {}  # Token/cost metadata from purple agent
         protocol_errors = 0
         max_protocol_errors = 5
         steps_used = 0
@@ -1351,6 +1426,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
             if action.name == RESPOND_ACTION_NAME:
                 answer = action.arguments.get("content")
+                # Extract token/cost metadata from purple agent
+                answer_metadata = action.arguments.get("_metadata", {})
                 if answer is None:
                     next_message = (
                         f"Invalid {RESPOND_ACTION_NAME}: missing `arguments.content`.\n\n"
@@ -1359,12 +1436,15 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     continue
                 logger.info(f"FINAL ANSWER type: {type(answer)}")
                 logger.info(f"FINAL ANSWER: {answer}")
+                if answer_metadata:
+                    logger.info(f"FINAL ANSWER metadata: {answer_metadata}")
                 if trace:
                     trace.add(
                         {
                             "type": "final_answer",
                             "turn": steps_used,
                             "content": answer,
+                            "metadata": answer_metadata,
                         }
                     )
                 break
@@ -1413,7 +1493,25 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             reported_result = {}
         
         logger.debug(f"Reported result: {json.dumps(reported_result, indent=2)}")
-        
+
+        # Calculate cost from token metadata
+        cost_metadata: Optional[Dict[str, Any]] = None
+        if answer_metadata:
+            model_name = answer_metadata.get("model", "")
+            input_tokens = answer_metadata.get("input_tokens", 0)
+            output_tokens = answer_metadata.get("output_tokens", 0)
+            task_cost = calculate_cost(model_name, input_tokens, output_tokens)
+            cost_metadata = {
+                "model": model_name,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost": task_cost,
+            }
+            logger.info(f"Task cost: model={model_name}, input_tokens={input_tokens}, "
+                       f"output_tokens={output_tokens}, cost=${task_cost:.6f}" if task_cost else
+                       f"Task cost: model={model_name}, input_tokens={input_tokens}, "
+                       f"output_tokens={output_tokens}, cost=N/A (model not in price dict)")
+
         # Extract data from trace for LLM-as-judge evaluations
         action_trace = trace.get_events("action") if trace else []
         tool_calls = trace.get_tool_calls() if trace else []
@@ -1501,6 +1599,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             efficiency=efficiency_metrics,
             submitted_answer=reported_result,
             ground_truth=gt_result,
+            task_cost=cost_metadata.get("cost") if cost_metadata else None,
         )
         
         # Log evaluation summary
@@ -1513,11 +1612,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # =====================================================================
         # CLEANUP
         # =====================================================================
-        logger.info("Cleaning up environment")
-        env_dir = os.path.join(self._workspace_dir, "environment")
-        if os.path.exists(env_dir):
-            shutil.rmtree(env_dir)
-        logger.debug("Environment cleanup complete")
+        if not self._keep_environment:
+            logger.info("Cleaning up environment")
+            env_dir = os.path.join(self._workspace_dir, "environment")
+            if os.path.exists(env_dir):
+                shutil.rmtree(env_dir)
+            logger.debug("Environment cleanup complete")
+        else:
+            logger.info(f"Keeping environment directory: {self._workspace_dir}/environment")
         
         # If MCP was used, disconnect the MCP server/client for this task
         if use_mcp and self._mcp_client:
@@ -1541,8 +1643,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                         logger.debug(f"Deleted trace file: {trace_path}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup execution trace: {e}")
-        
-        return evaluation
+
+        return evaluation, cost_metadata
       
     def _build_task_prompt(self, task: dict, domain: str, use_mcp: bool = True) -> str:
         """Build the initial task prompt for the purple agent.

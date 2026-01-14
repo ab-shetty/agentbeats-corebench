@@ -266,20 +266,23 @@ class TaskEvaluation:
     task_id: str
     domain: str
     success: bool  # True if all questions answered correctly
-    
+
     accuracy: AccuracyMetrics
     reproducibility: Optional[ReproducibilityMetrics]
     faithfulness: FaithfulnessMetrics
     task_adherence: TaskAdherenceMetrics
     efficiency: EfficiencyMetrics
-    
+
     # Raw data for debugging
     submitted_answer: Any
     ground_truth: list[dict]
+
+    # Cost tracking (None if not available)
+    task_cost: Optional[float] = None
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization.
-        
+
         Uses _make_json_safe to handle numpy types and other non-serializable objects.
         """
         return _make_json_safe({
@@ -291,6 +294,7 @@ class TaskEvaluation:
             "faithfulness": asdict(self.faithfulness),
             "task_adherence": asdict(self.task_adherence),
             "efficiency": asdict(self.efficiency),
+            "task_cost": self.task_cost,
         })
 
 
