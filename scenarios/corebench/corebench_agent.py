@@ -119,6 +119,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
     def __init__(self):
         self.ctx_id_to_messages: dict[str, list[dict]] = {}
+        # Token tracking per context
+        self.ctx_id_to_tokens: dict[str, dict[str, int]] = {}
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """
@@ -144,6 +146,34 @@ class CoreBenchPurpleAgent(AgentExecutor):
             if not model.startswith("nebius/"):
                 model = f"nebius/{model}"
             return {"model": model, "messages": messages}
+
+    def _track_tokens(self, context_id: str, response) -> None:
+        """Track tokens from a completion response."""
+        if context_id not in self.ctx_id_to_tokens:
+            self.ctx_id_to_tokens[context_id] = {"input_tokens": 0, "output_tokens": 0}
+
+        if hasattr(response, 'usage') and response.usage:
+            usage = response.usage
+            prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0
+            completion_tokens = getattr(usage, 'completion_tokens', 0) or 0
+            self.ctx_id_to_tokens[context_id]["input_tokens"] += prompt_tokens
+            self.ctx_id_to_tokens[context_id]["output_tokens"] += completion_tokens
+            logger.debug(f"Token usage: input={prompt_tokens}, output={completion_tokens}, "
+                        f"total_input={self.ctx_id_to_tokens[context_id]['input_tokens']}, "
+                        f"total_output={self.ctx_id_to_tokens[context_id]['output_tokens']}")
+
+    def _get_effective_model_name(self) -> str:
+        """Get the effective model name being used (with provider prefix)."""
+        if TEXT_API_BASE:
+            model = TEXT_MODEL
+            if not model.startswith("openai/"):
+                model = f"openai/{model}"
+            return model
+        else:
+            model = TEXT_MODEL
+            if not model.startswith("nebius/"):
+                model = f"nebius/{model}"
+            return model
 
     # -------------------------
     # Utility: parse tool call
@@ -223,6 +253,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 logger.info("Calling LLM:")
                 response = completion(**self._completion_kwargs(messages))
+                self._track_tokens(context.context_id, response)
 
                 # Log the response details
                 logger.debug(f"LLM Response object: {response}")
@@ -281,7 +312,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         # Call LLM again
                         logger.info("Calling LLM again for actual tool call")
                         response = completion(**self._completion_kwargs(messages))
-                        
+                        self._track_tokens(context.context_id, response)
+
                         assistant_content = response.choices[0].message.content
                         if assistant_content is None:
                             logger.error("Follow-up request also returned no content!")
@@ -322,6 +354,16 @@ Example:
                     })
                     continue
 
+                # Add token metadata for FINAL_ANSWER
+                if tool_call.get("name") == "FINAL_ANSWER":
+                    tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+                    tool_call["arguments"]["_metadata"] = {
+                        "model": self._get_effective_model_name(),
+                        "input_tokens": tokens["input_tokens"],
+                        "output_tokens": tokens["output_tokens"],
+                    }
+                    logger.info(f"Adding token metadata to FINAL_ANSWER: {tool_call['arguments']['_metadata']}")
+
                 # Always forward tool intent verbatim
                 formatted = "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
                 logger.info(f"Sending tool call: {tool_call.get('name', 'unknown')}")
@@ -338,6 +380,7 @@ Example:
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
                 if tool_call.get("name") == "FINAL_ANSWER":
                     self.ctx_id_to_messages.pop(context.context_id, None)
+                    self.ctx_id_to_tokens.pop(context.context_id, None)
                 return
 
             except Exception as e:
@@ -355,6 +398,7 @@ Example:
                 )
                 # Cleanup: Free memory after error fallback
                 self.ctx_id_to_messages.pop(context.context_id, None)
+                self.ctx_id_to_tokens.pop(context.context_id, None)
                 return
 
         # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
@@ -369,6 +413,7 @@ Example:
         )
         # Cleanup: Free memory after max_turns fallback
         self.ctx_id_to_messages.pop(context.context_id, None)
+        self.ctx_id_to_tokens.pop(context.context_id, None)
         return
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
