@@ -2,9 +2,7 @@
 
 **Testing AI Agents' Ability to Reproduce Published Scientific Research**
 
-🔬 **Based on [CoreBench](https://github.com/siegelz/core-bench)** by Siegel et al., we "agentified" 
-the original benchmark for the [AgentBeats](https://agentbeats.ai) platform, adding a green agent 
-orchestrator, with comprehensive evaluation metrics, and expanding the benchmark with new research capsules.
+🔬 **[CORE-Bench](https://github.com/siegelz/core-bench)** "(Computational Reproducibility Agent Benchmark") by [Siegel et al.](https://openreview.net/forum?id=BsMMc4MEGS) tests the ability of AI agents to reproduce the results of scientific publications based on code and data provided by their authors. We "agentified" the original benchmark (in its current form as part of [HAL](https://github.com/princeton-pli/hal-harness)) for the [AgentBeats](https://agentbeats.ai) platform (adding a green agent orchestrator), expanded the benchmark with newer research papers, and introduced an alternative success metric that rewards partial progress toward the goal in lieu of the original binary pass/fail metric.
 
 ## Quickstart
 1. Clone the repo
