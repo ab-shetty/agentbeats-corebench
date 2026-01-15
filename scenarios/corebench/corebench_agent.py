@@ -350,10 +350,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 logger.debug(f"Sending {len(messages)} messages to LLM")
                 logger.debug(f"Messages: {json.dumps(messages, indent=2)}")
                 
-                # model can take values such as:
-                # "gemini/gemini-3-pro-preview"
-                # "openai/gpt-5-mini"
-                # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 logger.info("Calling LLM:")
                 response = completion(**self._completion_kwargs(messages))
                 self._track_tokens(context.context_id, response)
