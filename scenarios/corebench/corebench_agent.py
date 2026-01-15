@@ -24,6 +24,7 @@ from datetime import datetime
 import uvicorn
 from dotenv import load_dotenv
 from litellm import completion
+import yaml
 
 load_dotenv()
 
@@ -55,13 +56,16 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
 # - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
 # - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
-DEFAULT_MODEL = "openai/gpt-5-nano"
+DEFAULT_MODEL = "openai/gpt-5-mini"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
 # Will be set in main() after CLI parsing
 TEXT_MODEL: str = DEFAULT_MODEL
 
+# Smolagents sets as 4(1.plan->act->observe 2.act->observe 3.act->observe 4.act->observe)
+# Number of action is counted in agentbeats, therefore planning interval is 4 
+PLANNING_INTERVAL = int((os.getenv("COREBENCH_PLANNING_INTERVAL") or "4").strip() or "4")
 
 # =========================
 # SYSTEM PROMPT
@@ -106,7 +110,6 @@ To provide the final answer, respond with:
 </json>
 """
 
-
 # =========================
 # PURPLE AGENT EXECUTOR
 # =========================
@@ -118,9 +121,32 @@ class CoreBenchPurpleAgent(AgentExecutor):
     """
 
     def __init__(self):
-        self.ctx_id_to_messages: dict[str, list[dict]] = {}
-        # Token tracking per context
-        self.ctx_id_to_tokens: dict[str, dict[str, int]] = {}
+        self.ctx_id_to_messages: dict[str, list[dict]] = {} # Conversation history
+        self.ctx_id_to_state: dict[str, dict[str, int]] = {} # Step tracker
+        self.ctx_id_to_tokens: dict[str, dict[str, int]] = {} # Token usage tracker
+        self._planning_initial_template = ""
+        self._planning_update_pre_template = ""
+        self._planning_update_post_template = ""
+        self._load_planning_templates()
+
+    # Function to load planning templates from yaml file. This is used to support ReAct-style planning.
+    def _load_planning_templates(self) -> None:
+        """Load planning prompts from YAML (fallback to empty strings if missing)."""
+        prompts_path = os.getenv("COREBENCH_PLANNING_PROMPTS")
+        if not prompts_path:
+            prompts_path = str(Path(__file__).with_name("planning_prompts.yaml"))
+        prompts_file = Path(prompts_path)
+        if not prompts_file.exists():
+            logger.warning(f"Planning prompts file not found: {prompts_file}")
+            return
+        try:
+            prompts = yaml.safe_load(prompts_file.read_text()) or {}
+            planning = prompts.get("planning", {})
+            self._planning_initial_template = planning.get("initial_plan", "") or ""
+            self._planning_update_pre_template = planning.get("update_plan_pre_messages", "") or ""
+            self._planning_update_post_template = planning.get("update_plan_post_messages", "") or ""
+        except Exception as e:
+            logger.warning(f"Failed to load planning prompts from {prompts_file}: {e}")
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """
@@ -139,10 +165,11 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 "messages": messages,
                 "api_base": TEXT_API_BASE,
                 "api_key": TEXT_API_KEY or "dummy",
+                "timeout": 60,
             }
         else:
             # Pass model directly to litellm (provider prefix already in model name)
-            return {"model": TEXT_MODEL, "messages": messages}
+            return {"model": TEXT_MODEL, "messages": messages, "timeout": 60}
 
     def _track_tokens(self, context_id: str, response) -> None:
         """Track tokens from a completion response."""
@@ -211,6 +238,71 @@ class CoreBenchPurpleAgent(AgentExecutor):
         logger.warning("No JSON found in response")
         return None
 
+    # Four Functions added to realize ReAct-style planning
+    def _ensure_state(self, context_id: str) -> dict[str, int]:
+        """Creates/returns per-conversation step count and last plan step."""
+        if context_id not in self.ctx_id_to_state:
+            self.ctx_id_to_state[context_id] = {"step_number": 1, "last_planned_step": 0}
+        return self.ctx_id_to_state[context_id]
+
+    def _insert_plan(self, state: dict[str, int]) -> bool:
+        """Decides whether to insert a plan on this step."""
+        if PLANNING_INTERVAL <= 0:
+            return False
+        if state["step_number"] == 1:
+            return True
+        return (state["step_number"] - state["last_planned_step"]) >= PLANNING_INTERVAL
+
+    def _keep_plan_history(self, messages: list[dict], max_items: int = 6) -> str:
+        """Create a history string for plan updates."""
+        tail = messages[-max_items:]
+        lines = []
+        for msg in tail:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                snippet = content.strip()
+            else:
+                snippet = str(content).strip()
+            if len(snippet) > 400:
+                snippet = snippet[:400] + "..."
+            lines.append(f"{role}: {snippet}")
+        return "\n".join(lines) if lines else "(no prior history)"
+
+    def _generate_plan(self, context_id: str, user_input: str, state: dict[str, int], messages: list[dict]) -> str:
+        """Generate a plan using initial or update planning prompts."""
+        # Decide which planning template to use - initial or update(pre+post)
+        if state["step_number"] == 1:
+            logger.info("Planning template: initial_plan")
+            plan_prompt = self._planning_initial_template or ""
+            if not plan_prompt:
+                return "Plan unavailable."
+            system_prompt = plan_prompt.replace("{{task}}", user_input)
+            plan_messages = [
+                {"role": "system", "content": system_prompt},
+            ]
+        else:
+            logger.info("Planning template: update_plan_pre_messages + update_plan_post_messages")
+            remaining_steps = max(0, 10 - state["step_number"])
+            pre_template = self._planning_update_pre_template or ""
+            post_template = self._planning_update_post_template or ""
+            if not pre_template or not post_template:
+                return "Plan unavailable."
+            pre_text = pre_template.replace("{{task}}", user_input)
+            post_text = post_template.replace("{{remaining_steps}}", str(remaining_steps))
+            history_text = self._keep_plan_history(messages)
+            plan_messages = [
+                {"role": "system", "content": pre_text},
+                {"role": "user", "content": history_text},
+                {"role": "user", "content": post_text},
+            ]
+            logger.info(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
+        response = completion(**self._completion_kwargs(plan_messages))
+        self._track_tokens(context_id, response)
+        if not response.choices or not response.choices[0].message:
+            return "Plan unavailable."
+        return response.choices[0].message.content or "Plan unavailable."
+
     # -------------------------
     # Main execution loop
     # -------------------------
@@ -229,16 +321,32 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self.ctx_id_to_messages[context.context_id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
+        # Get the current step (one planning per PLANNING_INTERVAL actions)
+        state = self._ensure_state(context.context_id)
+        logger.info(f"Number of steps: {state}")
+        # Decide whether to insert a plan
+        logger.info(f"Insert plan decision: {self._insert_plan(state)}")
 
         messages = self.ctx_id_to_messages[context.context_id]
         messages.append({"role": "user", "content": user_input})
-        logger.debug(f"Conversation has {len(messages)} messages")
+        logger.info(f"Conversation has {len(messages)} messages")
 
         max_turns = 10
 
+        did_plan = False
         for turn in range(max_turns):
-            logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
+            # logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
+                # Insert plan if it is the right step
+                if not did_plan and self._insert_plan(state):
+                    # Generate and insert plan
+                    plan_text = self._generate_plan(context.context_id, user_input, state, messages)
+                    messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
+                    logger.info(f"Plan: {plan_text}")
+                    logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
+                    state["last_planned_step"] = state["step_number"]
+                    did_plan = True
+
                 logger.debug(f"Sending {len(messages)} messages to LLM")
                 logger.debug(f"Messages: {json.dumps(messages, indent=2)}")
                 
@@ -375,7 +483,10 @@ Example:
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
                 if tool_call.get("name") == "FINAL_ANSWER":
                     self.ctx_id_to_messages.pop(context.context_id, None)
+                    self.ctx_id_to_state.pop(context.context_id, None)
                     self.ctx_id_to_tokens.pop(context.context_id, None)
+                else:
+                    state["step_number"] += 1
                 return
 
             except Exception as e:
@@ -393,6 +504,7 @@ Example:
                 )
                 # Cleanup: Free memory after error fallback
                 self.ctx_id_to_messages.pop(context.context_id, None)
+                self.ctx_id_to_state.pop(context.context_id, None)
                 self.ctx_id_to_tokens.pop(context.context_id, None)
                 return
 
@@ -408,6 +520,7 @@ Example:
         )
         # Cleanup: Free memory after max_turns fallback
         self.ctx_id_to_messages.pop(context.context_id, None)
+        self.ctx_id_to_state.pop(context.context_id, None)
         self.ctx_id_to_tokens.pop(context.context_id, None)
         return
 
