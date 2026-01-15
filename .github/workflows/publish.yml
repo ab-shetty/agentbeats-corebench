@@ -54,6 +54,8 @@ jobs:
             type=semver,pattern={{major}}
             # For main branch, create tag 'latest'
             type=raw,value=latest,enable={{is_default_branch}}
+            # For branch pushes, create tag with branch name
+            type=ref,event=branch
             # For PRs, create tag 'pr-123'
             type=ref,event=pr
 
