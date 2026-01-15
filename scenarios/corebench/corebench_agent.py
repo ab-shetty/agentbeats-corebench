@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
 # - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
 # - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
-DEFAULT_MODEL = "openai/gpt-5-mini"
+DEFAULT_MODEL = "nebius/openai/gpt-oss-20b"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
