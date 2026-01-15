@@ -977,27 +977,472 @@
         "capsule_doi": "https://doi.org/10.24433/CO.1889895.v1"
     },
     {
-        "field": "Computer Science",
+        "field": "Social Sciences",
         "language": "Python",
-        "capsule_title": "BERTopic-based topic modeling in scientometric analysis of Blockchain integrated Digital Twin Security",
-        "capsule_id": "capsule-3560168",
-        "task_prompt": "Run the run file and report the final summary metrics.",
+        "capsule_title": "NEURELIA — Scaled Model & Canonical Claims Verification Capsule (v3.0)",
+        "capsule_id": "capsule-1796796",
+        "task_prompt": "Run the run file and report on the headline portfolio results.",
         "results": [
             {
-                "Report the top topic word for Topic 0": "blockchain",
-                "Report the top topic word for Topic 4": "digital"
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
             },
             {
-                "Report the top topic word for Topic 0": "blockchain",
-                "Report the top topic word for Topic 4": "digital"
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
             },
             {
-                "Report the top topic word for Topic 0": "blockchain",
-                "Report the top topic word for Topic 4": "digital"
+                "What is the median net savings in billions (B)?": 11.26,
+                "what is the mean net savings in billions (B)?": 24.87
             }
 
         ],
-        "capsule_doi": "https://doi.org/10.24433/CO.8174015.v1"
+        "capsule_doi": "https://doi.org/10.24433/CO.9425963.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "Python",
+        "capsule_title": "SAGE Protocol v2.1 — Golden Erratum & Verification Capsule (v3.0)",
+        "capsule_id": "capsule-4977619",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "Implied per-capita median $ per person?": 6003.03,
+                "What is the median social NPV (Trillion USD)?": 1.8,
+                "How many approximate lives saved?": 1200000
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03,
+                "What is the median social NPV (Trillion USD)?": 1.8,
+                "How many approximate lives saved?": 1200000
+            },
+            {
+                "Implied per-capita median $ per person?": 6003.03,
+                "What is the median social NPV (Trillion USD)?": 1.8,
+                "How many approximate lives saved?": 1200000
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.4544914.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python",
+        "capsule_title": "A Predictive Analytics Framework for Early-Stage Thyroid Cancer Using ML",
+        "capsule_id": "capsule-7800694",
+        "task_prompt": "Run the run file and report on the generated html results.",
+        "results": [
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            },
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            },
+            {
+                "Which model has the highest Macro F1?": "CatBoost",
+                "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2418823.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python",
+        "capsule_title": "CATegorical and PHenotypic Image SyntHetic LearnING (CATphising): An Alternative to Federated Learning in Medical Imaging",
+        "capsule_id": "capsule-6800638",
+        "task_prompt": "Run the run file and report on the output xlsx and ROC.png files.",
+        "results": [
+            {
+                "fig which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            },
+            {
+                "fig which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            },
+            {
+                "fig which method has the lowest AUC?": "CATphising",
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
+                "What is the highest AUC based on the output xlsx?": 0.978	
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.4976589.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "Python",
+        "capsule_title": "The Sovereign Constitution Fabric (SNF) v2.0 — Reproducible Synthetic-Floor Capsule",
+        "capsule_id": "capsule-8412128",
+        "task_prompt": "Run the run file and report on the result metrics.",
+        "results": [
+            {
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
+            },
+            {
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
+            },
+            {
+                "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
+                "What is the median of the dignity_score?": 0.5888590852515395
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.9005626.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "R",
+        "capsule_title": "From Faces to Politics: Vision-Language Models (Sometimes) Link Visual Demographic Characteristics to Ideological Labels",
+        "capsule_id": "capsule-6791130",
+        "task_prompt": "Run the run file and report on the output results.",
+        "results": [
+            {
+                "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            },
+            {
+                "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            },
+            {
+                "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
+                "Fig among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
+            }
+
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.3160992.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "Human Dignity Firewall v1.3 — Zero-Leakage Autonomy Engine for Manipulation Detection & Behavioral Integrity",
+        "capsule_id": "capsule-2538444",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "How many Draconian human-dignity laws are there? Respond in integer": 4,
+                "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
+        "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian human-dignity laws are there? Respond in integer": 4,
+                "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
+        "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian human-dignity laws are there? Respond in integer": 4,
+                "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
+        "What is the exit status?": "SUCCESS"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.3008145.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "ZVIS v1.6 — Ultra-Audit & Verification Capsule",
+        "capsule_id": "capsule-4020210",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "How many Draconian audit laws are there? Respond in integer": 5,
+                "What is the first law of Draconian audit law?": "Fraud Detection Test",
+                "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian audit laws are there? Respond in integer": 5,
+                "What is the first law of Draconian audit law?": "Fraud Detection Test",
+                "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian audit laws are there? Respond in integer": 5,
+                "What is the first law of Draconian audit law?": "Fraud Detection Test",
+                "What is the exit status?": "SUCCESS"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2920111.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "VERA-DNA v2.1 — Ultra-Golden Capsule",
+        "capsule_id": "capsule-8514506",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "How many Draconian laws are there? Respond in integer": 5,
+                "What is the second law of Draconian?": "Conservative Floor Test",
+                "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian laws are there? Respond in integer": 5,
+                "What is the second law of Draconian?": "Conservative Floor Test",
+                "What is the exit status?": "SUCCESS"
+            },
+            {
+                "How many Draconian laws are there? Respond in integer": 5,
+                "What is the second law of Draconian?": "Conservative Floor Test",
+                "What is the exit status?": "SUCCESS"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.7604839.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "SIF — Golden Proof-Bundle Execution Capsule (v1.0)",
+        "capsule_id": "capsule-5944340",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "What are the 3 verification checks on the toy-case bundle?": "Quantiles match, SHA-256 digest matches, Toy Merkle root matches",
+                "What is the SIF reference checks completion status?": "completed successfully"
+            },
+            {
+                "What are the 3 verification checks on the toy-case bundle?": "Quantiles match, SHA-256 digest matches, Toy Merkle root matches",
+                "What is the SIF reference checks completion status?": "completed successfully"
+            },
+            {
+                "What are the 3 verification checks on the toy-case bundle?": "Quantiles match, SHA-256 digest matches, Toy Merkle root matches",
+                "What is the SIF reference checks completion status?": "completed successfully"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.9343631.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "SPORTS.DNA — Golden SDK Execution Capsule (v1.1)",
+        "capsule_id": "capsule-9398054",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "For this total payout period in appendix IV, the disability cohort falls short of its floor. Under the FairnessBudget logic, the shortfall is not treated as savings. What must be done instead for inclusion purpose?": "Escrow top-up required: 2.00 M USD",
+                "What is the Target share for disability cohort? Give response as an integer percentage": 20
+            },
+            {
+                "For this total payout period in appendix IV, the disability cohort falls short of its floor. Under the FairnessBudget logic, the shortfall is not treated as savings. What must be done instead for inclusion purpose?": "Escrow top-up required: 2.00 M USD",
+                "What is the Target share for disability cohort? Give response as an integer percentage": 20
+            },
+            {
+                "For this total payout period in appendix IV, the disability cohort falls short of its floor. Under the FairnessBudget logic, the shortfall is not treated as savings. What must be done instead for inclusion purpose?": "Escrow top-up required: 2.00 M USD",
+                "What is the Target share for disability cohort? Give response as an integer percentage": 20
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2878676.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "DignityProof — Global Verifiability Capsule (v1.0)",
+        "capsule_id": "capsule-7655932",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+            },
+            {
+                "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+            },
+            {
+                "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.0436753.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "Python", 
+        "capsule_title": "Proactive and reactive construction of memory-based preferences",
+        "capsule_id": "capsule-0625246",
+        "task_prompt": "Run the run file and report on the results.",
+        "results": [
+            {
+                "fig does Fan In or Fan Out has a higher decision reactivation?": "Fan In"
+            },
+            {
+                "fig does Fan In or Fan Out has a higher decision reactivation?": "Fan In"
+            },
+            {
+                "fig does Fan In or Fan Out has a higher decision reactivation?": "Fan In"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2559896.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "Python", 
+        "capsule_title": "Bayesian Social Science Statistics: from the Very Beginning",
+        "capsule_id": "capsule-8772484",
+        "task_prompt": "Run the run file and report on the generated output.",
+        "results": [
+            {
+                "fig for glassdoor salary, was mean posterior or mean prior higher? ": "posterior"
+            },
+            {
+                "fig for glassdoor salary, was mean posterior or mean prior higher? ": "posterior"
+            },
+            {
+                "fig for glassdoor salary, was mean posterior or mean prior higher? ": "posterior"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.6820210.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python", 
+        "capsule_title": "Measured intrapatient radiomic variability as a predictor of treatment response in multi-metastatic soft tissue sarcoma patients (revised)",
+        "capsule_id": "capsule-3030670",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "fig does high MIRV or low MIRV has a higher survival probability?": "low MIRV"
+            },
+            {
+                "fig does high MIRV or low MIRV has a higher survival probability?": "low MIRV"
+            },
+            {
+                "fig does high MIRV or low MIRV has a higher survival probability?": "low MIRV"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.1188840.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python", 
+        "capsule_title": "Boundary Complexity of (Sub-) Cortical Areas Predict Deep Brain Stimulation Outcomes in Parkinson's Disease",
+        "capsule_id": "capsule-0732329",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "What is the final test result accuracy?": 0.7879,
+                "What is the final test result F1 score?": 0.4407
+            },
+            {
+                "What is the final test result accuracy?": 0.7879,
+                "What is the final test result F1 score?": 0.4407
+            },
+            {
+                "What is the final test result accuracy?": 0.7879,
+                "What is the final test result F1 score?": 0.4407
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.9780346.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "R", 
+        "capsule_title": "Unravelling the transcriptome of the human tuberculosis lesion and its clinical implications",
+        "capsule_id": "capsule-9294029",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "fig what location has the lowest median enrichment score?": "H"
+            },
+            {
+                "fig what location has the lowest median enrichment score?": "H"
+            },
+            {
+                "fig what location has the lowest median enrichment score?": "H"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.4427270.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "R", 
+        "capsule_title": "custom code for: Predicting IVF live birth probabilities using live machine learning, center-specific models",
+        "capsule_id": "capsule-6295990",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "What is the LBP model ROC-AUC (weighted)": 0.7142857,
+                "What is the percent AUC-Improvement? Give an integer": 25
+            },
+            {
+                "What is the LBP model ROC-AUC (weighted)": 0.7142857,
+                "What is the percent AUC-Improvement? Give an integer": 25
+            },
+            {
+                "What is the LBP model ROC-AUC (weighted)": 0.7142857,
+                "What is the percent AUC-Improvement? Give an integer": 25
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.8413662.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "R", 
+        "capsule_title": "VascularBC-ST: the code to analyze the Vascular microenvironment of Breast Cancer using Spatial Transcriptome",
+        "capsule_id": "capsule-9477017",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+            },
+            {
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+            },
+            {
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.9243235.v1"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "Codex Wall v4.0 — Encrypted Holo-Causality & Predictive Governance (Reproducible Capsule)",
+        "capsule_id": "capsule-0201673",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "What is the mean_gdp_gain_pct?": 0.9999005880537901,
+                "What is the p95?": 1.1643528158326386,
+                "What is the p50?": 0.9999966483532146
+            },
+            {
+                "What is the mean_gdp_gain_pct?": 0.9999005880537901,
+                "What is the p95?": 1.1643528158326386,
+                "What is the p50?": 0.9999966483532146
+            },
+            {
+                "What is the mean_gdp_gain_pct?": 0.9999005880537901,
+                "What is the p95?": 1.1643528158326386,
+                "What is the p50?": 0.9999966483532146
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.4072743.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "R", 
+        "capsule_title": "Preventing Sexual Violence -- A Behavioral Problem Without a Behaviorally-Informed Solution",
+        "capsule_id": "capsule-3088870",
+        "task_prompt": "Run the run file and report on the final outputs.",
+        "results": [
+            {
+                "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
+            },
+            {
+                "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
+            },
+            {
+                "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.5471833.v2"
     }
 
 ]
