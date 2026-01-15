@@ -17,7 +17,8 @@ import sys
 import os
 import logging
 import traceback
-from typing import Optional
+import time
+from typing import Any, Optional
 from pathlib import Path
 from datetime import datetime
 
@@ -121,6 +122,89 @@ class CoreBenchPurpleAgent(AgentExecutor):
         self.ctx_id_to_messages: dict[str, list[dict]] = {}
         # Token tracking per context
         self.ctx_id_to_tokens: dict[str, dict[str, int]] = {}
+        # Track task prompts and TTL for context GC (evaluator may reject FINAL_ANSWER and reprompt).
+        self.ctx_id_to_task_prompt: dict[str, str] = {}
+        # Track how often we've rejected FINAL_ANSWER for formatting/keys to avoid loopiness.
+        self.ctx_id_to_final_answer_rejections: dict[str, int] = {}
+        self.ctx_id_last_seen: dict[str, float] = {}
+        self.ctx_id_done: set[str] = set()
+
+    def _gc_contexts(self, *, now: float, keep_ctx: str, ttl_seconds: float = 900.0, max_contexts: int = 64) -> None:
+        """Garbage-collect old conversation state to avoid unbounded growth."""
+        # TTL cleanup
+        for ctx_id, last_seen in list(self.ctx_id_last_seen.items()):
+            if ctx_id == keep_ctx:
+                continue
+            if now - last_seen <= ttl_seconds:
+                continue
+            self.ctx_id_to_messages.pop(ctx_id, None)
+            self.ctx_id_to_tokens.pop(ctx_id, None)
+            self.ctx_id_to_task_prompt.pop(ctx_id, None)
+            self.ctx_id_to_final_answer_rejections.pop(ctx_id, None)
+            self.ctx_id_last_seen.pop(ctx_id, None)
+            self.ctx_id_done.discard(ctx_id)
+
+        # Max-contexts cleanup (drop oldest, excluding keep_ctx)
+        if len(self.ctx_id_last_seen) <= max_contexts:
+            return
+        for ctx_id, _last_seen in sorted(self.ctx_id_last_seen.items(), key=lambda kv: kv[1]):
+            if len(self.ctx_id_last_seen) <= max_contexts:
+                break
+            if ctx_id == keep_ctx:
+                continue
+            self.ctx_id_to_messages.pop(ctx_id, None)
+            self.ctx_id_to_tokens.pop(ctx_id, None)
+            self.ctx_id_to_task_prompt.pop(ctx_id, None)
+            self.ctx_id_to_final_answer_rejections.pop(ctx_id, None)
+            self.ctx_id_last_seen.pop(ctx_id, None)
+            self.ctx_id_done.discard(ctx_id)
+
+
+    @staticmethod
+    def _try_parse_float(value: Any) -> Optional[float]:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            cleaned = value.strip().replace("%", "")
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _extract_required_question_keys(task_prompt: str) -> list[str]:
+        """
+        Extract required question-text keys from the evaluator prompt.
+
+        The evaluator includes a JSON list like:
+        'REQUIRED: Return EXACTLY these keys ...:\n[ "question1", ... ]'
+        """
+        marker = "REQUIRED: Return EXACTLY these keys"
+        idx = task_prompt.find(marker)
+        if idx == -1:
+            return []
+
+        start = task_prompt.find("[", idx)
+        if start == -1:
+            return []
+
+        try:
+            parsed, _end = json.JSONDecoder().raw_decode(task_prompt[start:])
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(parsed, list):
+            return []
+
+        required: list[str] = []
+        for item in parsed:
+            if not isinstance(item, str):
+                continue
+            s = item.strip()
+            if s:
+                required.append(s)
+        return required
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """
@@ -174,41 +258,216 @@ class CoreBenchPurpleAgent(AgentExecutor):
     # Utility: parse tool call
     # -------------------------
     def _parse_tool_call(self, text: str) -> Optional[dict]:
+        # Log what we're trying to parse (truncated for readability)
+        logger.debug(f"Parsing response: {text[:500]}...")
+        
+        # Helper to fix common JSON escape issues (e.g., \| in grep patterns)
+        def _fix_json_escapes(s: str) -> str:
+            # Fix invalid escapes like \| \' etc. by double-escaping or removing
+            # This handles patterns like: "grep -i 'error\|result'" which should be "grep -i 'error|result'"
+            # or properly escaped as "grep -i 'error\\|result'"
+            import re as re_inner
+            # Replace \| with | (pipe doesn't need escaping in JSON strings)
+            s = s.replace('\\|', '|')  # literal \| -> |
+            # Replace other invalid single-char escapes
+            s = re_inner.sub(r'\\([^"\\nrtbfu/])', r'\1', s)
+            return s
+        
+        # Helper to normalize loosely formatted tool calls into the required envelope
+        def _normalize_tool_call(obj: dict) -> Optional[dict]:
+            if not isinstance(obj, dict):
+                return None
+
+            # Already wrapped as a tool call envelope.
+            if "name" in obj and "arguments" in obj and isinstance(obj.get("arguments"), dict):
+                tool_name = obj.get("name")
+                arguments = obj.get("arguments") or {}
+
+                # Special-case FINAL_ANSWER: evaluator expects arguments.content to be the answer dict.
+                if tool_name == "FINAL_ANSWER":
+                    content = arguments.get("content")
+                    if isinstance(content, dict):
+                        return obj
+
+                    # Common model mistake: put answers directly under arguments instead of arguments.content.
+                    extracted_content: dict[str, Any] = {}
+                    for k, v in arguments.items():
+                        if k in ("_metadata", "content"):
+                            continue
+                        if isinstance(k, int):
+                            key_str = str(k)
+                        elif isinstance(k, str):
+                            key_str = k.strip()
+                        else:
+                            continue
+                        if key_str:
+                            extracted_content[key_str] = v
+
+                    rebuilt_args: dict[str, Any] = {"content": extracted_content}
+                    if "_metadata" in arguments:
+                        rebuilt_args["_metadata"] = arguments["_metadata"]
+                    return {"name": "FINAL_ANSWER", "arguments": rebuilt_args}
+
+                return obj
+            
+            # Handle {"FINAL_ANSWER": value} format (model using FINAL_ANSWER as key instead of name)
+            if "FINAL_ANSWER" in obj:
+                val = obj["FINAL_ANSWER"]
+                if isinstance(val, dict):
+                    return {"name": "FINAL_ANSWER", "arguments": {"content": val}}
+                # If it's just a status like true/"complete", return empty content
+                return {"name": "FINAL_ANSWER", "arguments": {"content": {}}}
+                
+            # Map common "final answer" shorthands to the required envelope
+            for key in ("final_answer", "final_result", "result", "answer", "answers", "content"):
+                if isinstance(obj.get(key), dict):
+                    return {"name": "FINAL_ANSWER", "arguments": {"content": obj[key]}}
+                
+            # If the JSON looks like a bare answers dict, assume it's a final answer payload.
+            keys = list(obj.keys())
+            if keys and all(isinstance(k, str) for k in keys):
+                stripped = [k.strip() for k in keys]
+                looks_numeric = all(k.isdigit() for k in stripped)
+                looks_question_text = any(" " in k for k in stripped)
+                if looks_numeric or looks_question_text:
+                    return {"name": "FINAL_ANSWER", "arguments": {"content": obj}}
+                
+            return None
+        
         # Try <json>...</json> tags first
         match = re.search(r"<json>\s*(.*?)\s*</json>", text, re.DOTALL)
         if match:
+            json_str = match.group(1)
+            logger.debug(f"Found <json> tags, content: {json_str[:200]}")
             try:
-                return json.loads(match.group(1))
+                parsed = json.loads(json_str)
+                logger.debug(f"Parsed JSON successfully: {type(parsed)}, keys: {list(parsed.keys()) if isinstance(parsed, dict) else 'N/A'}")
+
+                normalized = _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+                if normalized:
+                    logger.debug(f"Normalized to: {normalized.get('name')}")
+                    return normalized
+                    
+                logger.warning(f"JSON parsed but not recognized as tool call: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed)}")
             except json.JSONDecodeError as e:
+                # Try fixing missing closing brace (common Llama4 issue)
+                try:
+                    fixed = json_str.rstrip()
+                    # Count braces to see if we're missing closing ones
+                    open_braces = fixed.count('{') - fixed.count('}')
+                    if open_braces > 0:
+                        fixed = fixed + ('}' * open_braces)
+                        parsed = json.loads(fixed)
+                        normalized = _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+                        if normalized:
+                            return normalized
+                except json.JSONDecodeError:
+                    pass
+                    
+                # Try fixing common escape issues
+                try:
+                    fixed = _fix_json_escapes(json_str)
+                    parsed = json.loads(fixed)
+                    return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+                except json.JSONDecodeError:
+                    pass
                 logger.warning(f"Failed to parse JSON from <json> tags: {e}")
-                logger.debug(f"JSON string was: {match.group(1)[:500]}")
+                logger.debug(f"JSON string was: {json_str[:500]}")
                 return None
 
         # Try markdown code blocks
         match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
+            json_str = match.group(1)
             try:
-                return json.loads(match.group(1))
+                parsed = json.loads(json_str)
+                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
             except json.JSONDecodeError as e:
+                try:
+                    parsed = json.loads(_fix_json_escapes(json_str))
+                    return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+                except json.JSONDecodeError:
+                    pass
                 logger.warning(f"Failed to parse JSON from code block: {e}")
                 return None
+        
+        # Try plain ``` code blocks (no language specified)
+        match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+            try:
+                parsed = json.loads(json_str)
+                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                try:
+                    parsed = json.loads(_fix_json_escapes(json_str))
+                    if isinstance(parsed, dict) and "name" in parsed:
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+        
+        # Try <tool_call>...</tool_call> (Llama-style)
+        match = re.search(r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.DOTALL | re.IGNORECASE)
+        if match:
+            json_str = match.group(1)
+            try:
+                parsed = json.loads(json_str)
+                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
+            except json.JSONDecodeError as e:
+                try:
+                    return json.loads(_fix_json_escapes(json_str))
+                except json.JSONDecodeError:
+                    pass
+                logger.warning(f"Failed to parse JSON from <tool_call> tags: {e}")
+        
+        # Try <function_call>...</function_call>
+        match = re.search(r"<function_call>\s*(.*?)\s*</function_call>", text, re.DOTALL | re.IGNORECASE)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
 
         # Try parsing entire response as JSON
         try:
-            return json.loads(text)
+            parsed = json.loads(text.strip())
+            if isinstance(parsed, dict):
+                return _normalize_tool_call(parsed) or parsed
         except json.JSONDecodeError:
             pass
         
-        # Last resort: search for JSON object in text
-        for pattern in [r"\{.*?\}", r"\{.*\}"]:
-            match = re.search(pattern, text, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except json.JSONDecodeError:
-                    continue
+        # Try to find a JSON object that looks like a tool call {"name": ..., "arguments": ...}
+        # Use a more precise pattern to find valid JSON objects
+        json_pattern = r'\{[^{}]*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}'
+        match = re.search(json_pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        
+        # Last resort: find any balanced JSON object
+        # Start from each { and try to find matching }
+        for i, char in enumerate(text):
+            if char == '{':
+                depth = 0
+                for j, c in enumerate(text[i:], i):
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            try:
+                                candidate = text[i:j+1]
+                                parsed = json.loads(candidate)
+                                if isinstance(parsed, dict) and "name" in parsed:
+                                    logger.info(f"Found tool call via balanced braces extraction")
+                                    return parsed
+                            except json.JSONDecodeError:
+                                pass
+                            break
 
-        logger.warning("No JSON found in response")
+        logger.warning(f"No JSON found in response. First 200 chars: {text[:200]}")
         return None
 
     # -------------------------
@@ -216,11 +475,15 @@ class CoreBenchPurpleAgent(AgentExecutor):
     # -------------------------
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         user_input = context.get_user_input()
+        now = time.time()
+        self.ctx_id_last_seen[context.context_id] = now
+        self._gc_contexts(now=now, keep_ctx=context.context_id)
+
         logger.info(f"=" * 80)
         logger.info(f"PURPLE AGENT - NEW REQUEST")
         logger.info(f"=" * 80)
-        logger.info(f"Context ID: {context.context_id}")
-        logger.info(f"Input length: {len(user_input)} chars")
+        # logger.info(f"Context ID: {context.context_id}")
+        # logger.info(f"Input length: {len(user_input)} chars")
         logger.debug(f"Full input: {user_input}")
 
         # Initialize purple agent conversation
@@ -229,6 +492,10 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self.ctx_id_to_messages[context.context_id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
+        # Capture the initial task prompt once per context_id (used for answer validation).
+        if context.context_id not in self.ctx_id_to_task_prompt:
+            self.ctx_id_to_task_prompt[context.context_id] = user_input
+            self.ctx_id_to_final_answer_rejections[context.context_id] = 0
 
         messages = self.ctx_id_to_messages[context.context_id]
         messages.append({"role": "user", "content": user_input})
@@ -239,7 +506,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         for turn in range(max_turns):
             logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
-                logger.debug(f"Sending {len(messages)} messages to LLM")
+                # logger.debug(f"Sending {len(messages)} messages to LLM")
                 logger.debug(f"Messages: {json.dumps(messages, indent=2)}")
                 
                 # model can take values such as:
@@ -335,7 +602,9 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     or "arguments" not in tool_call         # missing required field
                     or not isinstance(tool_call.get("arguments"), dict)  # arguments not a dict
                 ):
+                    # Log what we received to help debug format issues
                     logger.warning("No valid structured tool call found; reprompting for JSON-only output")
+                    logger.warning(f"   LLM said: {assistant_content[:200]}{'...' if len(assistant_content) > 200 else ''}")
                     messages.append({
                         "role": "user",
                         "content": """Your previous response was NOT a valid tool call.
@@ -348,6 +617,179 @@ Example:
 </json>"""
                     })
                     continue
+
+                # Extra enforcement for FINAL_ANSWER: ensure arguments.content exists and is non-empty.
+                if tool_call.get("name") == "FINAL_ANSWER":
+                    arguments = tool_call.get("arguments") or {}
+
+                    # If the model put answers directly under arguments, coerce into arguments.content.
+                    if "content" not in arguments and isinstance(arguments, dict):
+                        coerced_content: dict[str, Any] = {}
+                        for k, v in arguments.items():
+                            if k == "_metadata":
+                                continue
+                            if isinstance(k, int):
+                                key_str = str(k)
+                            elif isinstance(k, str):
+                                key_str = k.strip()
+                            else:
+                                continue
+                            if key_str:
+                                coerced_content[key_str] = v
+                        tool_call["arguments"] = {
+                            "content": coerced_content,
+                            **({"_metadata": arguments["_metadata"]} if "_metadata" in arguments else {}),
+                        }
+                        arguments = tool_call["arguments"]
+
+                    task_prompt = self.ctx_id_to_task_prompt.get(context.context_id, "")
+                    required_questions = self._extract_required_question_keys(task_prompt)
+                    required_question_set = set(required_questions)
+
+                    raw_content = arguments.get("content")
+                    if not isinstance(raw_content, dict):
+                        raw_content = {}
+
+                    # Normalize content keys.
+                    content: dict[str, Any] = {}
+                    for k, v in raw_content.items():
+                        if isinstance(k, int):
+                            key_str = str(k)
+                        elif isinstance(k, str):
+                            key_str = k.strip()
+                        else:
+                            continue
+                        if key_str:
+                            content[key_str] = v
+
+                    # Legacy compatibility: map numeric keys ("1") or numbered keys ("1. ...") by index.
+                    if required_questions and content:
+                        mapped: dict[str, Any] = {}
+                        for k, v in content.items():
+                            if k in required_question_set:
+                                mapped[k] = v
+                                continue
+
+                            if k.isdigit():
+                                idx = int(k) - 1
+                                if 0 <= idx < len(required_questions):
+                                    mapped[required_questions[idx]] = v
+                                continue
+
+                            m = re.match(r"^(?:q)?(\d+)\s*[\.\):]\s*(.*)$", k, flags=re.IGNORECASE)
+                            if m:
+                                idx = int(m.group(1)) - 1
+                                if 0 <= idx < len(required_questions):
+                                    mapped[required_questions[idx]] = v
+                                continue
+
+                            mapped[k] = v
+                        content = mapped
+
+                    # Filter out unexpected keys to reduce evaluator warnings.
+                    filtered_content = (
+                        {k: v for k, v in content.items() if k in required_question_set}
+                        if required_questions
+                        else content
+                    )
+
+                    max_rejections = 2
+                    rejection_count = self.ctx_id_to_final_answer_rejections.get(context.context_id, 0)
+
+                    def _reject_final_answer(*, reason: str, prompt: str) -> bool:
+                        nonlocal rejection_count
+                        if rejection_count >= max_rejections:
+                            logger.warning(
+                                "FINAL_ANSWER enforcement: too many rejections (%d); allowing submission (%s)",
+                                rejection_count,
+                                reason,
+                            )
+                            return False
+                        rejection_count += 1
+                        self.ctx_id_to_final_answer_rejections[context.context_id] = rejection_count
+                        messages.append({"role": "user", "content": prompt})
+                        return True
+
+                    # Require at least one tool result before answering (prevents blind guessing).
+                    saw_tool_result = any(
+                        m.get("role") == "user"
+                        and isinstance(m.get("content"), str)
+                        and "Tool execution result" in m.get("content")
+                        for m in messages
+                    )
+
+                    # Reject obvious placeholder answers.
+                    def _looks_like_placeholder(v: Any) -> bool:
+                        if not isinstance(v, str):
+                            return False
+                        s = v.strip()
+                        if not s:
+                            return True
+                        if re.fullmatch(r"value\\d+", s, flags=re.IGNORECASE):
+                            return True
+                        if "<" in s and ">" in s:
+                            return True
+                        return False
+
+                    if not saw_tool_result:
+                        if _reject_final_answer(
+                            reason="no_tool_result",
+                            prompt=(
+                                "Do NOT guess. You must request tools and read outputs before FINAL_ANSWER.\n\n"
+                                "Start with a tool call like:\n"
+                                "<json>\n"
+                                "{\"name\":\"execute_bash\",\"arguments\":{\"command\":\"ls -R\"}}\n"
+                                "</json>"
+                            ),
+                        ):
+                            continue
+
+                    if not filtered_content:
+                        example_key = required_questions[0] if required_questions else "question text here"
+                        if _reject_final_answer(
+                            reason="empty_content",
+                            prompt=(
+                                "Your FINAL_ANSWER is invalid for this benchmark.\n\n"
+                                "Reply with:\n"
+                                "<json>\n"
+                                f"{{\"name\":\"FINAL_ANSWER\",\"arguments\":{{\"content\":{{\"{example_key}\":<ACTUAL_VALUE>}}}}}}\n"
+                                "</json>\n\n"
+                                "Rules:\n"
+                                "- `arguments.content` must be a NON-EMPTY JSON object\n"
+                                "- Keys must be the EXACT question text strings from the prompt\n"
+                                "- Values must be the extracted answers (no placeholders like \"value1\")"
+                            ),
+                        ):
+                            continue
+
+                    if required_questions:
+                        missing_questions = [q for q in required_questions if q not in filtered_content]
+                        if missing_questions:
+                            missing_preview = missing_questions[:12]
+                            more = "" if len(missing_questions) <= 12 else f"\n... ({len(missing_questions) - 12} more)"
+                            if _reject_final_answer(
+                                reason="missing_keys",
+                                prompt=(
+                                    "Your FINAL_ANSWER is missing required question keys.\n\n"
+                                    "Missing:\n- " + "\n- ".join(missing_preview) + more + "\n\n"
+                                    "Do NOT submit FINAL_ANSWER until you have answers for ALL questions.\n"
+                                    "Use tools to extract the missing values, then reply with FINAL_ANSWER using the EXACT question text as keys."
+                                ),
+                            ):
+                                continue
+
+                    if all(_looks_like_placeholder(v) for v in filtered_content.values()):
+                        if _reject_final_answer(
+                            reason="placeholders",
+                            prompt=(
+                                "Your FINAL_ANSWER contains placeholder values.\n\n"
+                                "Go back, use tools to locate the exact values in files, then reply with FINAL_ANSWER "
+                                "containing the real extracted numbers/labels only."
+                            ),
+                        ):
+                            continue
+
+                    tool_call["arguments"]["content"] = filtered_content
 
                 # Add token metadata for FINAL_ANSWER
                 if tool_call.get("name") == "FINAL_ANSWER":
@@ -369,13 +811,11 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                logger.info("Response sent successfully")
+                # logger.info("Response sent successfully")
                 
-                # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
-                # Without this, ctx_id_to_messages grows indefinitely across capsules.
+                # Mark completion but keep state briefly (evaluator may reject and reprompt).
                 if tool_call.get("name") == "FINAL_ANSWER":
-                    self.ctx_id_to_messages.pop(context.context_id, None)
-                    self.ctx_id_to_tokens.pop(context.context_id, None)
+                    self.ctx_id_done.add(context.context_id)
                 return
 
             except Exception as e:
@@ -391,9 +831,7 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                # Cleanup: Free memory after error fallback
-                self.ctx_id_to_messages.pop(context.context_id, None)
-                self.ctx_id_to_tokens.pop(context.context_id, None)
+                self.ctx_id_done.add(context.context_id)
                 return
 
         # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
@@ -406,9 +844,7 @@ Example:
                 context_id=context.context_id,
             )
         )
-        # Cleanup: Free memory after max_turns fallback
-        self.ctx_id_to_messages.pop(context.context_id, None)
-        self.ctx_id_to_tokens.pop(context.context_id, None)
+        self.ctx_id_done.add(context.context_id)
         return
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -479,13 +915,13 @@ def main():
         http_handler=request_handler,
     )
 
-    logger.info("Server starting...")
+    # logger.info("Server starting...")
     uvicorn.run(
         app.build(),
         host=args.host,
         port=args.port,
         timeout_keep_alive=300,
-        log_level="info"
+        log_level="warning"
     )
 
 

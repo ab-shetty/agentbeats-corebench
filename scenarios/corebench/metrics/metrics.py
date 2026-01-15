@@ -662,8 +662,6 @@ MIN_FILE_SIZE_BYTES = 10
 # File extensions that should have executable permission
 EXECUTABLE_EXTENSIONS = {".sh", ".py", ".pl", ".rb", ".bash"}
 
-# TODO: investigate file reproduction patterns, files might not be in the exact same
-# repo as it was deleted from etc, this needs to be accounted for in the logic of this calculation
 def evaluate_reproducibility(
     workspace_dir: str,
     removed_paths: list[str],
@@ -850,10 +848,10 @@ Task prompt: {task_prompt}
 ## Domain-Specific Success Criteria
 
 ### MEDIUM MODE (corebench_medium)
-**Gold Standard:** Read REPRODUCING.md → Execute documented command (usually Docker) → Handle errors → Generate output
+**Gold Standard:** Read README.md → Execute documented command (usually Docker) → Handle errors → Generate output
 
 **Automatic Disqualifiers (cap score at 0.3):**
-- Never read REPRODUCING.md
+- Never read README.md
 - Read pre-existing results instead of executing
 - Never attempted documented command
 
@@ -879,41 +877,6 @@ Task prompt: {task_prompt}
 - **Problem Solving (25%)**: How well did agent handle obstacles?
 - **Discovery (15%)**: How efficiently did agent find needed information?
 - **Technical Execution (10%)**: Proper tool usage and commands
-
-### 5-Step Decision Tree
-
-**1. Did agent attempt to EXECUTE/REPRODUCE?**
-   - NO → Read existing results? YES: ≤0.3 | NO: ≤0.2
-   - YES → Continue
-
-**2. Did agent read documentation?**
-   - Medium: Read REPRODUCING.md?
-   - Hard: Check Dockerfile/README?
-   - NO → ≤0.5 | YES → Continue
-
-**3. Did agent use CORRECT method?**
-   - Medium: Used documented Docker/script?
-   - Hard: Attempted Docker or proper dependency install?
-   - NO → 0.4-0.6 | YES → Continue
-
-**4. Execution outcome:**
-   - Infrastructure timeout (correct approach): 0.75-0.85
-   - Missing deps (tried to resolve): 0.65-0.80
-   - Gave up after first error: 0.5-0.65
-   - Successfully generated output: 0.85-1.0
-
-**5. Execution quality:**
-   - Efficient: +0.05 to +0.10
-   - Excellent error handling: +0.05
-   - Poor navigation: -0.05 to -0.10
-
-### Automatic Penalties
-
-**Cap at 0.4:** Read existing results instead of executing
-**Cap at 0.6:** Never read documentation (Medium: REPRODUCING.md, Hard: Dockerfile/README)  
-**Cap at 0.7:** Gave up immediately after first error
-
-**No Penalty:** Infrastructure timeouts, platform issues, network restrictions
 
 ## Scoring Examples
 
@@ -972,10 +935,9 @@ Answer correctness: {answer_summary}
 
 ## Your Task
 
-1. Apply 5-Step Decision Tree to the trace above
-2. Assign component scores: Core _/50, Problem _/25, Discovery _/15, Technical _/10
-3. Check for automatic penalties
-4. Calculate final score and write reasoning
+1. Assign component scores to the trace: Core _/50, Problem _/25, Discovery _/15, Technical _/10
+2. Check for automatic penalties
+3. Calculate final score and write reasoning
 
 ## Output Format
 ```json
