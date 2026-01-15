@@ -335,7 +335,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
         did_plan = False
         for turn in range(max_turns):
-            # logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
+            logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
                 # Insert plan if it is the right step
                 if not did_plan and self._insert_plan(state):
