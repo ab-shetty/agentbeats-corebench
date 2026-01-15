@@ -1081,6 +1081,7 @@ class CoreBenchEvaluator(GreenAgent):
                     if model_used is None and cost_meta.get("model"):
                         model_used = cost_meta["model"]
 
+            cost_efficiency = None
             if total_cost is not None and aggregate.num_tasks > 0:
                 cost_efficiency = total_cost / aggregate.num_tasks
                 logger.info(f"Cost efficiency: ${cost_efficiency:.6f}/task (total: ${total_cost:.6f})")
@@ -1106,7 +1107,7 @@ class CoreBenchEvaluator(GreenAgent):
                 "num_tasks": aggregate.num_tasks,
                 "num_successful": aggregate.num_successful,
                 "pass_rate": aggregate.pass_rate,
-                "cost_efficiency": round(cost_efficiency, 4),  # Dollar cost per task
+                "cost_efficiency": round(cost_efficiency, 4) if cost_efficiency is not None else None,  # Dollar cost per task
 
                 # Accuracy metrics
                 "mean_accuracy": aggregate.mean_accuracy,
