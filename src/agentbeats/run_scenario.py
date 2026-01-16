@@ -58,6 +58,52 @@ async def wait_for_agents(cfg: dict, timeout: int = 30) -> bool:
 
 
 def parse_toml(scenario_path: str) -> dict:
+    """
+    Parse a CoreBench scenario TOML file into a normalized configuration dictionary.
+
+    This function:
+    - Loads a TOML scenario definition from disk
+    - Extracts and normalizes the green agent configuration
+    - Extracts participant agent definitions
+    - Parses endpoint URLs into (host, port) tuples
+    - Returns a simplified dictionary structure used by the runtime
+
+    Expected TOML structure (high level):
+    - [green_agent]
+        - endpoint = "http://host:port/..."
+        - cmd // startup command // host and port 
+    - [[participants]]
+        - role = "agent"
+        - endpoint = "http://host:port/..."
+        - cmd // startup command // option of adding model (if not default)
+    - [config]
+        - Arbitrary scenario configuration: cache the capsules, num_tasks, capsule id, etc.
+
+    Args:
+        scenario_path: Filesystem path to the scenario TOML file.
+
+    Returns:
+        A dictionary with the following structure:
+        {
+            "green_agent": {
+                "host": str,
+                "port": int,
+                "cmd": str,
+            },
+            "participants": [
+                {
+                    "role": str,
+                    "host": str,
+                    "port": int,
+                    "cmd": str,
+                },
+                ...
+            ],
+            "config": dict,
+        }
+
+    Exits the process with status code 1 if the scenario file does not exist.
+    """
     path = Path(scenario_path)
     if not path.exists():
         print(f"Error: Scenario file not found: {path}")
