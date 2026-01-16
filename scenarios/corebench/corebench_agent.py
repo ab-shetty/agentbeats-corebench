@@ -17,14 +17,14 @@ import sys
 import os
 import logging
 import traceback
-import time
-from typing import Any, Optional
+from typing import Optional
 from pathlib import Path
 from datetime import datetime
 
 import uvicorn
 from dotenv import load_dotenv
 from litellm import completion
+import yaml
 
 load_dotenv()
 
@@ -56,13 +56,16 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
 # - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
 # - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
-DEFAULT_MODEL = "openai/gpt-5-nano"
+DEFAULT_MODEL = "nebius/openai/gpt-oss-120b"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
 # Will be set in main() after CLI parsing
 TEXT_MODEL: str = DEFAULT_MODEL
 
+# Smolagents sets as 4(1.plan->act->observe 2.act->observe 3.act->observe 4.act->observe)
+# Number of action is counted in agentbeats, therefore planning interval is 4 
+PLANNING_INTERVAL = int((os.getenv("COREBENCH_PLANNING_INTERVAL") or "4").strip() or "4")
 
 # =========================
 # SYSTEM PROMPT
@@ -107,7 +110,6 @@ To provide the final answer, respond with:
 </json>
 """
 
-
 # =========================
 # PURPLE AGENT EXECUTOR
 # =========================
@@ -119,92 +121,32 @@ class CoreBenchPurpleAgent(AgentExecutor):
     """
 
     def __init__(self):
-        self.ctx_id_to_messages: dict[str, list[dict]] = {}
-        # Token tracking per context
-        self.ctx_id_to_tokens: dict[str, dict[str, int]] = {}
-        # Track task prompts and TTL for context GC (evaluator may reject FINAL_ANSWER and reprompt).
-        self.ctx_id_to_task_prompt: dict[str, str] = {}
-        # Track how often we've rejected FINAL_ANSWER for formatting/keys to avoid loopiness.
-        self.ctx_id_to_final_answer_rejections: dict[str, int] = {}
-        self.ctx_id_last_seen: dict[str, float] = {}
-        self.ctx_id_done: set[str] = set()
+        self.ctx_id_to_messages: dict[str, list[dict]] = {} # Conversation history
+        self.ctx_id_to_state: dict[str, dict[str, int]] = {} # Step tracker
+        self.ctx_id_to_tokens: dict[str, dict[str, int]] = {} # Token usage tracker
+        self._planning_initial_template = ""
+        self._planning_update_pre_template = ""
+        self._planning_update_post_template = ""
+        self._load_planning_templates()
 
-    def _gc_contexts(self, *, now: float, keep_ctx: str, ttl_seconds: float = 900.0, max_contexts: int = 64) -> None:
-        """Garbage-collect old conversation state to avoid unbounded growth."""
-        # TTL cleanup
-        for ctx_id, last_seen in list(self.ctx_id_last_seen.items()):
-            if ctx_id == keep_ctx:
-                continue
-            if now - last_seen <= ttl_seconds:
-                continue
-            self.ctx_id_to_messages.pop(ctx_id, None)
-            self.ctx_id_to_tokens.pop(ctx_id, None)
-            self.ctx_id_to_task_prompt.pop(ctx_id, None)
-            self.ctx_id_to_final_answer_rejections.pop(ctx_id, None)
-            self.ctx_id_last_seen.pop(ctx_id, None)
-            self.ctx_id_done.discard(ctx_id)
-
-        # Max-contexts cleanup (drop oldest, excluding keep_ctx)
-        if len(self.ctx_id_last_seen) <= max_contexts:
+    # Function to load planning templates from yaml file. This is used to support ReAct-style planning.
+    def _load_planning_templates(self) -> None:
+        """Load planning prompts from YAML (fallback to empty strings if missing)."""
+        prompts_path = os.getenv("COREBENCH_PLANNING_PROMPTS")
+        if not prompts_path:
+            prompts_path = str(Path(__file__).with_name("planning_prompts.yaml"))
+        prompts_file = Path(prompts_path)
+        if not prompts_file.exists():
+            logger.warning(f"Planning prompts file not found: {prompts_file}")
             return
-        for ctx_id, _last_seen in sorted(self.ctx_id_last_seen.items(), key=lambda kv: kv[1]):
-            if len(self.ctx_id_last_seen) <= max_contexts:
-                break
-            if ctx_id == keep_ctx:
-                continue
-            self.ctx_id_to_messages.pop(ctx_id, None)
-            self.ctx_id_to_tokens.pop(ctx_id, None)
-            self.ctx_id_to_task_prompt.pop(ctx_id, None)
-            self.ctx_id_to_final_answer_rejections.pop(ctx_id, None)
-            self.ctx_id_last_seen.pop(ctx_id, None)
-            self.ctx_id_done.discard(ctx_id)
-
-
-    @staticmethod
-    def _try_parse_float(value: Any) -> Optional[float]:
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            cleaned = value.strip().replace("%", "")
-            try:
-                return float(cleaned)
-            except ValueError:
-                return None
-        return None
-
-    @staticmethod
-    def _extract_required_question_keys(task_prompt: str) -> list[str]:
-        """
-        Extract required question-text keys from the evaluator prompt.
-
-        The evaluator includes a JSON list like:
-        'REQUIRED: Return EXACTLY these keys ...:\n[ "question1", ... ]'
-        """
-        marker = "REQUIRED: Return EXACTLY these keys"
-        idx = task_prompt.find(marker)
-        if idx == -1:
-            return []
-
-        start = task_prompt.find("[", idx)
-        if start == -1:
-            return []
-
         try:
-            parsed, _end = json.JSONDecoder().raw_decode(task_prompt[start:])
-        except json.JSONDecodeError:
-            return []
-
-        if not isinstance(parsed, list):
-            return []
-
-        required: list[str] = []
-        for item in parsed:
-            if not isinstance(item, str):
-                continue
-            s = item.strip()
-            if s:
-                required.append(s)
-        return required
+            prompts = yaml.safe_load(prompts_file.read_text()) or {}
+            planning = prompts.get("planning", {})
+            self._planning_initial_template = planning.get("initial_plan", "") or ""
+            self._planning_update_pre_template = planning.get("update_plan_pre_messages", "") or ""
+            self._planning_update_post_template = planning.get("update_plan_post_messages", "") or ""
+        except Exception as e:
+            logger.warning(f"Failed to load planning prompts from {prompts_file}: {e}")
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """
@@ -223,10 +165,11 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 "messages": messages,
                 "api_base": TEXT_API_BASE,
                 "api_key": TEXT_API_KEY or "dummy",
+                "timeout": 60,
             }
         else:
             # Pass model directly to litellm (provider prefix already in model name)
-            return {"model": TEXT_MODEL, "messages": messages}
+            return {"model": TEXT_MODEL, "messages": messages, "timeout": 60}
 
     def _track_tokens(self, context_id: str, response) -> None:
         """Track tokens from a completion response."""
@@ -258,226 +201,113 @@ class CoreBenchPurpleAgent(AgentExecutor):
     # Utility: parse tool call
     # -------------------------
     def _parse_tool_call(self, text: str) -> Optional[dict]:
-        # Log what we're trying to parse (truncated for readability)
-        logger.debug(f"Parsing response: {text[:500]}...")
-        
-        # Helper to fix common JSON escape issues (e.g., \| in grep patterns)
-        def _fix_json_escapes(s: str) -> str:
-            # Fix invalid escapes like \| \' etc. by double-escaping or removing
-            # This handles patterns like: "grep -i 'error\|result'" which should be "grep -i 'error|result'"
-            # or properly escaped as "grep -i 'error\\|result'"
-            import re as re_inner
-            # Replace \| with | (pipe doesn't need escaping in JSON strings)
-            s = s.replace('\\|', '|')  # literal \| -> |
-            # Replace other invalid single-char escapes
-            s = re_inner.sub(r'\\([^"\\nrtbfu/])', r'\1', s)
-            return s
-        
-        # Helper to normalize loosely formatted tool calls into the required envelope
-        def _normalize_tool_call(obj: dict) -> Optional[dict]:
-            if not isinstance(obj, dict):
-                return None
-
-            # Already wrapped as a tool call envelope.
-            if "name" in obj and "arguments" in obj and isinstance(obj.get("arguments"), dict):
-                tool_name = obj.get("name")
-                arguments = obj.get("arguments") or {}
-
-                # Special-case FINAL_ANSWER: evaluator expects arguments.content to be the answer dict.
-                if tool_name == "FINAL_ANSWER":
-                    content = arguments.get("content")
-                    if isinstance(content, dict):
-                        return obj
-
-                    # Common model mistake: put answers directly under arguments instead of arguments.content.
-                    extracted_content: dict[str, Any] = {}
-                    for k, v in arguments.items():
-                        if k in ("_metadata", "content"):
-                            continue
-                        if isinstance(k, int):
-                            key_str = str(k)
-                        elif isinstance(k, str):
-                            key_str = k.strip()
-                        else:
-                            continue
-                        if key_str:
-                            extracted_content[key_str] = v
-
-                    rebuilt_args: dict[str, Any] = {"content": extracted_content}
-                    if "_metadata" in arguments:
-                        rebuilt_args["_metadata"] = arguments["_metadata"]
-                    return {"name": "FINAL_ANSWER", "arguments": rebuilt_args}
-
-                return obj
-            
-            # Handle {"FINAL_ANSWER": value} format (model using FINAL_ANSWER as key instead of name)
-            if "FINAL_ANSWER" in obj:
-                val = obj["FINAL_ANSWER"]
-                if isinstance(val, dict):
-                    return {"name": "FINAL_ANSWER", "arguments": {"content": val}}
-                # If it's just a status like true/"complete", return empty content
-                return {"name": "FINAL_ANSWER", "arguments": {"content": {}}}
-                
-            # Map common "final answer" shorthands to the required envelope
-            for key in ("final_answer", "final_result", "result", "answer", "answers", "content"):
-                if isinstance(obj.get(key), dict):
-                    return {"name": "FINAL_ANSWER", "arguments": {"content": obj[key]}}
-                
-            # If the JSON looks like a bare answers dict, assume it's a final answer payload.
-            keys = list(obj.keys())
-            if keys and all(isinstance(k, str) for k in keys):
-                stripped = [k.strip() for k in keys]
-                looks_numeric = all(k.isdigit() for k in stripped)
-                looks_question_text = any(" " in k for k in stripped)
-                if looks_numeric or looks_question_text:
-                    return {"name": "FINAL_ANSWER", "arguments": {"content": obj}}
-                
-            return None
-        
         # Try <json>...</json> tags first
         match = re.search(r"<json>\s*(.*?)\s*</json>", text, re.DOTALL)
         if match:
-            json_str = match.group(1)
-            logger.debug(f"Found <json> tags, content: {json_str[:200]}")
             try:
-                parsed = json.loads(json_str)
-                logger.debug(f"Parsed JSON successfully: {type(parsed)}, keys: {list(parsed.keys()) if isinstance(parsed, dict) else 'N/A'}")
-
-                normalized = _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-                if normalized:
-                    logger.debug(f"Normalized to: {normalized.get('name')}")
-                    return normalized
-                    
-                logger.warning(f"JSON parsed but not recognized as tool call: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed)}")
+                return json.loads(match.group(1))
             except json.JSONDecodeError as e:
-                # Try fixing missing closing brace (common Llama4 issue)
-                try:
-                    fixed = json_str.rstrip()
-                    # Count braces to see if we're missing closing ones
-                    open_braces = fixed.count('{') - fixed.count('}')
-                    if open_braces > 0:
-                        fixed = fixed + ('}' * open_braces)
-                        parsed = json.loads(fixed)
-                        normalized = _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-                        if normalized:
-                            return normalized
-                except json.JSONDecodeError:
-                    pass
-                    
-                # Try fixing common escape issues
-                try:
-                    fixed = _fix_json_escapes(json_str)
-                    parsed = json.loads(fixed)
-                    return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-                except json.JSONDecodeError:
-                    pass
                 logger.warning(f"Failed to parse JSON from <json> tags: {e}")
-                logger.debug(f"JSON string was: {json_str[:500]}")
+                logger.debug(f"JSON string was: {match.group(1)[:500]}")
                 return None
 
         # Try markdown code blocks
         match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if match:
-            json_str = match.group(1)
-            try:
-                parsed = json.loads(json_str)
-                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-            except json.JSONDecodeError as e:
-                try:
-                    parsed = json.loads(_fix_json_escapes(json_str))
-                    return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-                except json.JSONDecodeError:
-                    pass
-                logger.warning(f"Failed to parse JSON from code block: {e}")
-                return None
-        
-        # Try plain ``` code blocks (no language specified)
-        match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
-        if match:
-            json_str = match.group(1)
-            try:
-                parsed = json.loads(json_str)
-                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-            except json.JSONDecodeError:
-                try:
-                    parsed = json.loads(_fix_json_escapes(json_str))
-                    if isinstance(parsed, dict) and "name" in parsed:
-                        return parsed
-                except json.JSONDecodeError:
-                    pass
-        
-        # Try <tool_call>...</tool_call> (Llama-style)
-        match = re.search(r"<tool_call>\s*(.*?)\s*</tool_call>", text, re.DOTALL | re.IGNORECASE)
-        if match:
-            json_str = match.group(1)
-            try:
-                parsed = json.loads(json_str)
-                return _normalize_tool_call(parsed) if isinstance(parsed, dict) else None
-            except json.JSONDecodeError as e:
-                try:
-                    return json.loads(_fix_json_escapes(json_str))
-                except json.JSONDecodeError:
-                    pass
-                logger.warning(f"Failed to parse JSON from <tool_call> tags: {e}")
-        
-        # Try <function_call>...</function_call>
-        match = re.search(r"<function_call>\s*(.*?)\s*</function_call>", text, re.DOTALL | re.IGNORECASE)
-        if match:
             try:
                 return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from code block: {e}")
+                return None
 
         # Try parsing entire response as JSON
         try:
-            parsed = json.loads(text.strip())
-            if isinstance(parsed, dict):
-                return _normalize_tool_call(parsed) or parsed
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
         
-        # Try to find a JSON object that looks like a tool call {"name": ..., "arguments": ...}
-        # Use a more precise pattern to find valid JSON objects
-        json_pattern = r'\{[^{}]*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}'
-        match = re.search(json_pattern, text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
-        
-        # Last resort: find any balanced JSON object
-        # Start from each { and try to find matching }
-        for i, char in enumerate(text):
-            if char == '{':
-                depth = 0
-                for j, c in enumerate(text[i:], i):
-                    if c == '{':
-                        depth += 1
-                    elif c == '}':
-                        depth -= 1
-                        if depth == 0:
-                            try:
-                                candidate = text[i:j+1]
-                                parsed = json.loads(candidate)
-                                if isinstance(parsed, dict) and "name" in parsed:
-                                    logger.info(f"Found tool call via balanced braces extraction")
-                                    return parsed
-                            except json.JSONDecodeError:
-                                pass
-                            break
+        # Last resort: search for JSON object in text
+        for pattern in [r"\{.*?\}", r"\{.*\}"]:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    continue
 
-        logger.warning(f"No JSON found in response. First 200 chars: {text[:200]}")
+        logger.warning("No JSON found in response")
         return None
+
+    # Four Functions added to realize ReAct-style planning
+    def _ensure_state(self, context_id: str) -> dict[str, int]:
+        """Creates/returns per-conversation step count and last plan step."""
+        if context_id not in self.ctx_id_to_state:
+            self.ctx_id_to_state[context_id] = {"step_number": 1, "last_planned_step": 0}
+        return self.ctx_id_to_state[context_id]
+
+    def _insert_plan(self, state: dict[str, int]) -> bool:
+        """Decides whether to insert a plan on this step."""
+        if PLANNING_INTERVAL <= 0:
+            return False
+        if state["step_number"] == 1:
+            return True
+        return (state["step_number"] - state["last_planned_step"]) >= PLANNING_INTERVAL
+
+    def _keep_plan_history(self, messages: list[dict], max_items: int = 6) -> str:
+        """Create a history string for plan updates."""
+        tail = messages[-max_items:]
+        lines = []
+        for msg in tail:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                snippet = content.strip()
+            else:
+                snippet = str(content).strip()
+            if len(snippet) > 400:
+                snippet = snippet[:400] + "..."
+            lines.append(f"{role}: {snippet}")
+        return "\n".join(lines) if lines else "(no prior history)"
+
+    def _generate_plan(self, context_id: str, user_input: str, state: dict[str, int], messages: list[dict]) -> str:
+        """Generate a plan using initial or update planning prompts."""
+        # Decide which planning template to use - initial or update(pre+post)
+        if state["step_number"] == 1:
+            logger.info("Planning template: initial_plan")
+            plan_prompt = self._planning_initial_template or ""
+            if not plan_prompt:
+                return "Plan unavailable."
+            system_prompt = plan_prompt.replace("{{task}}", user_input)
+            plan_messages = [
+                {"role": "system", "content": system_prompt},
+            ]
+        else:
+            logger.info("Planning template: update_plan_pre_messages + update_plan_post_messages")
+            remaining_steps = max(0, 10 - state["step_number"])
+            pre_template = self._planning_update_pre_template or ""
+            post_template = self._planning_update_post_template or ""
+            if not pre_template or not post_template:
+                return "Plan unavailable."
+            pre_text = pre_template.replace("{{task}}", user_input)
+            post_text = post_template.replace("{{remaining_steps}}", str(remaining_steps))
+            history_text = self._keep_plan_history(messages)
+            plan_messages = [
+                {"role": "system", "content": pre_text},
+                {"role": "user", "content": history_text},
+                {"role": "user", "content": post_text},
+            ]
+            logger.info(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
+        response = completion(**self._completion_kwargs(plan_messages))
+        self._track_tokens(context_id, response)
+        if not response.choices or not response.choices[0].message:
+            return "Plan unavailable."
+        return response.choices[0].message.content or "Plan unavailable."
 
     # -------------------------
     # Main execution loop
     # -------------------------
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         user_input = context.get_user_input()
-        now = time.time()
-        self.ctx_id_last_seen[context.context_id] = now
-        self._gc_contexts(now=now, keep_ctx=context.context_id)
         logger.info(f"=" * 80)
         logger.info(f"PURPLE AGENT - NEW REQUEST")
         logger.info(f"=" * 80)
@@ -491,27 +321,35 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self.ctx_id_to_messages[context.context_id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
-        # Capture the initial task prompt once per context_id (used for answer validation).
-        if context.context_id not in self.ctx_id_to_task_prompt:
-            self.ctx_id_to_task_prompt[context.context_id] = user_input
-            self.ctx_id_to_final_answer_rejections[context.context_id] = 0
+        # Get the current step (one planning per PLANNING_INTERVAL actions)
+        state = self._ensure_state(context.context_id)
+        logger.info(f"Number of steps: {state}")
+        # Decide whether to insert a plan
+        logger.info(f"Insert plan decision: {self._insert_plan(state)}")
 
         messages = self.ctx_id_to_messages[context.context_id]
         messages.append({"role": "user", "content": user_input})
-        logger.debug(f"Conversation has {len(messages)} messages")
+        logger.info(f"Conversation has {len(messages)} messages")
 
         max_turns = 10
 
+        did_plan = False
         for turn in range(max_turns):
             logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
-                # logger.debug(f"Sending {len(messages)} messages to LLM")
+                # Insert plan if it is the right step
+                if not did_plan and self._insert_plan(state):
+                    # Generate and insert plan
+                    plan_text = self._generate_plan(context.context_id, user_input, state, messages)
+                    messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
+                    logger.info(f"Plan: {plan_text}")
+                    logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
+                    state["last_planned_step"] = state["step_number"]
+                    did_plan = True
+
+                logger.debug(f"Sending {len(messages)} messages to LLM")
                 logger.debug(f"Messages: {json.dumps(messages, indent=2)}")
                 
-                # model can take values such as:
-                # "gemini/gemini-3-pro-preview"
-                # "openai/gpt-5-mini"
-                # "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
                 logger.info("Calling LLM:")
                 response = completion(**self._completion_kwargs(messages))
                 self._track_tokens(context.context_id, response)
@@ -575,10 +413,36 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         response = completion(**self._completion_kwargs(messages))
                         self._track_tokens(context.context_id, response)
 
-                        assistant_content = response.choices[0].message.content
+                        follow_up_message = response.choices[0].message
+                        assistant_content = follow_up_message.content
+
+                        # Handle case where follow-up also returns reasoning but no content
                         if assistant_content is None:
-                            logger.error("Follow-up request also returned no content!")
-                            raise ValueError("Both initial and follow-up responses had no content")
+                            follow_up_reasoning = getattr(follow_up_message, 'reasoning_content', None)
+                            if follow_up_reasoning:
+                                logger.warning("Follow-up also returned reasoning without content, reprompting")
+                                logger.debug(f"Follow-up reasoning: {follow_up_reasoning}")
+                                # Add the reasoning to history and prompt again
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": f"[Follow-up reasoning: {follow_up_reasoning}]"
+                                })
+                                messages.append({
+                                    "role": "user",
+                                    "content": (
+                                        "Please stop reasoning and provide the actual JSON tool call now:\n\n"
+                                        "<json>\n"
+                                        "{\n"
+                                        '  "name": "tool_name",\n'
+                                        '  "arguments": {...}\n'
+                                        "}\n"
+                                        "</json>"
+                                    )
+                                })
+                                continue
+                            else:
+                                logger.error("Follow-up request also returned no content and no reasoning!")
+                                raise ValueError("Both initial and follow-up responses had no content")
                     else:
                         logger.error("Assistant content is None and no reasoning_content!")
                         logger.error(f"Message: {message}")
@@ -590,20 +454,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 messages.append(
                     {"role": "assistant", "content": assistant_content}
                 )
-                
-                # Detect and warn about multi-tool spam
-                json_block_count = assistant_content.count("<json>")
-                if json_block_count > 1:
-                    logger.warning(f"Agent output {json_block_count} JSON blocks; only first will be executed")
-                    # Add feedback so model learns to stop doing this
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            f"WARNING: You output {json_block_count} tool calls in one response. "
-                            "Only the FIRST one was executed. You must wait for each tool's result "
-                            "before calling the next tool. One tool call per response only."
-                        )
-                    })
 
                 # Check for structured JSON tool intent
                 tool_call = self._parse_tool_call(assistant_content)
@@ -615,9 +465,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     or "arguments" not in tool_call         # missing required field
                     or not isinstance(tool_call.get("arguments"), dict)  # arguments not a dict
                 ):
-                    # Log what we received to help debug format issues
                     logger.warning("No valid structured tool call found; reprompting for JSON-only output")
-                    logger.warning(f"   LLM said: {assistant_content[:200]}{'...' if len(assistant_content) > 200 else ''}")
                     messages.append({
                         "role": "user",
                         "content": """Your previous response was NOT a valid tool call.
@@ -652,9 +500,15 @@ Example:
                     )
                 )
                 logger.info("Response sent successfully")
-
+                
+                # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
+                # Without this, ctx_id_to_messages grows indefinitely across capsules.
                 if tool_call.get("name") == "FINAL_ANSWER":
-                    self.ctx_id_done.add(context.context_id)
+                    self.ctx_id_to_messages.pop(context.context_id, None)
+                    self.ctx_id_to_state.pop(context.context_id, None)
+                    self.ctx_id_to_tokens.pop(context.context_id, None)
+                else:
+                    state["step_number"] += 1
                 return
 
             except Exception as e:
@@ -672,6 +526,7 @@ Example:
                 )
                 # Cleanup: Free memory after error fallback
                 self.ctx_id_to_messages.pop(context.context_id, None)
+                self.ctx_id_to_state.pop(context.context_id, None)
                 self.ctx_id_to_tokens.pop(context.context_id, None)
                 return
 
@@ -687,7 +542,8 @@ Example:
         )
         # Cleanup: Free memory after max_turns fallback
         self.ctx_id_to_messages.pop(context.context_id, None)
-        self.ctx_id_done.add(context.context_id)
+        self.ctx_id_to_state.pop(context.context_id, None)
+        self.ctx_id_to_tokens.pop(context.context_id, None)
         return
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -758,13 +614,13 @@ def main():
         http_handler=request_handler,
     )
 
-    # logger.info("Server starting...")
+    logger.info("Server starting...")
     uvicorn.run(
         app.build(),
         host=args.host,
         port=args.port,
         timeout_keep_alive=300,
-        log_level="warning"
+        log_level="info"
     )
 
 
