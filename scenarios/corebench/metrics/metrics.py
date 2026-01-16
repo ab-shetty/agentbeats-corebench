@@ -2,32 +2,29 @@
 CoreBench Evaluation Metrics Module
 ====================================
 
-This module provides clean, well-defined metrics for evaluating the purple agent's performance
+This module provides metrics for evaluating the purple agent's performance
 on the CoreBench reproducibility benchmark. The benchmark (agentified for AgentBeats) tests
 whether agents can reproduce both the environment and results of published research papers.
 
-Metrics Overview
-----------------
-
-1. **ACCURACY** - Are the submitted answers correct compared to ground truth?
+**ACCURACY** - Are the submitted answers correct compared to ground truth?
    - Numeric values: Uses 95% prediction intervals to handle run-to-run variance
      in stochastic experiments (e.g., ML training with different random seeds).
      The interval is computed using t-distribution: mean ± t(0.975, n-1) * std * sqrt(1 + 1/n)
    - String values: Case-insensitive exact match after stripping whitespace
    - List values: Element-wise exact comparison (order matters, types matter)
    
-2. **REPRODUCIBILITY** - Did the agent successfully restore removed files/folders?
+**REPRODUCIBILITY** - Did the agent successfully restore removed files/folders?
    - Only applicable for medium/hard difficulty levels where files are removed
    - Quality checks: Files must have content (>= 10 bytes), directories must not be empty
    - Tracks executable permissions for scripts (informational)
 
-
-4. **TASK ADHERENCE** (LLM-as-Judge) - Did the agent properly follow task instructions?
+   
+**TASK ADHERENCE** (LLM-as-Judge) - Did the agent properly follow task instructions?
    - Evaluates navigation strategy, rule compliance, and problem-solving approach
    - Assesses how well the agent understood and executed the task
    - Returns qualitative assessment (excellent/good/fair/poor) plus strengths/weaknesses
 
-5. **EFFICIENCY** - How resource-efficient was the agent's approach?
+**EFFICIENCY** - How resource-efficient was the agent's approach?
    - Steps used vs maximum allowed
    - Tool call count and execution time
    - Protocol/format errors encountered
@@ -47,13 +44,10 @@ Ground truth is expected as a list of dicts from multiple experiment runs:
 [
     {"question1": 0.95, "question2": "label", ...},  # Run 1
     {"question1": 0.93, "question2": "label", ...},  # Run 2
-    ...
 ]
-
-For single-run experiments, provide a list with one dict.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Any, Callable, Optional
 import json
 import logging
@@ -95,12 +89,6 @@ def _is_vision_question(key: str) -> bool:
     
     Based on CORE-Bench paper definition: questions requiring extraction of
     results from figures, graphs, plots, charts, or images.
-    
-    Args:
-        key: Question identifier (e.g., "accuracy_fig1", "plot_error_rate")
-        
-    Returns:
-        True if the key suggests a vision-based question
     """
     return bool(_VISION_KEY_PATTERN.search(key))
 
@@ -207,8 +195,6 @@ class TaskAdherenceMetrics:
         reasoning: LLM judge's explanation of the assessment
         strengths: List of things the agent did well
         weaknesses: List of areas for improvement
-        status: "success" if evaluation completed, "error" if API call failed
-        error_message: Error details if status is "error", None otherwise
     """
     score: float  # 0.0-1.0
     followed_instructions: bool
@@ -830,7 +816,6 @@ def evaluate_reproducibility(
 # =============================================================================
 # TASK ADHERENCE EVALUATION (LLM-as-Judge)
 # judge gets passed tool calls + results
-# , 
 # =============================================================================
 TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI agent executed a computational reproducibility benchmark task.
 
@@ -878,46 +863,6 @@ Task prompt: {task_prompt}
 - **Discovery (15%)**: How efficiently did agent find needed information?
 - **Technical Execution (10%)**: Proper tool usage and commands
 
-## Scoring Examples
-
-**Example A: Medium - Perfect Execution (0.95)**
-```
-Trace shows: Read REPRODUCING.md → Executed Docker command from docs → Generated results
-Scoring: Core 50/50 + Problem 24/25 + Discovery 15/15 + Technical 10/10 = 0.99 → 0.95
-Reasoning: Perfect adherence to documented process. Minor deduction for not checking existing results first.
-```
-
-**Example B: Hard - Timeout (0.82)**
-```
-Trace shows: Found Dockerfile → Built Docker image → Ran container → TIMED OUT (infrastructure)
-Scoring: Core 48/50 + Problem 23/25 + Discovery 15/15 + Technical 10/10 = 0.96 → 0.82
-Reasoning: Correct approach throughout. Timeout is infrastructure issue, not agent error. Would be 0.95+ without timeout.
-Penalty: -0.10 for incomplete (not agent's fault, but didn't finish)
-```
-
-**Example C: Medium - Read Existing Results (0.25)**
-```
-Trace shows: Listed files → Found results/ → Read output files → Never read REPRODUCING.md → Never executed
-Scoring: Core 5/50 + Problem 5/25 + Discovery 10/15 + Technical 5/10 = 0.25
-Reasoning: FAILED CORE OBJECTIVE. Found shortcut, didn't reproduce. Automatic cap at 0.3.
-Penalty: -0.6 (read existing results)
-```
-
-**Example D: Hard - Gave Up Quickly (0.48)**
-```
-Trace shows: Ran script → ModuleNotFoundError → Tried pip install (failed) → Gave up → Never checked Dockerfile
-Scoring: Core 20/50 + Problem 10/25 + Discovery 8/15 + Technical 10/10 = 0.48
-Reasoning: Attempted execution (good) but gave up after one obstacle. Never explored Docker solution.
-Penalty: -0.3 (gave up quickly)
-```
-
-**Example E: Medium - Wrong Method but Succeeded (0.68)**
-```
-Trace shows: Read REPRODUCING.md (said use Docker) → Docker unavailable → Manually installed deps → Ran script → Success
-Scoring: Core 30/50 + Problem 23/25 + Discovery 14/15 + Technical 9/10 = 0.76 → 0.68
-Reasoning: Reproduced successfully but didn't use documented method. Good problem-solving.
-Penalty: -0.2 (deviated from instructions)
-```
 
 ## Execution Trace
 Steps taken: {steps_used}
@@ -1344,7 +1289,7 @@ async def evaluate_task_adherence(
                 logger.warning(f"Failed to write task adherence judge output trace: {e}")
         
         return TaskAdherenceMetrics(
-            score=float(result.get("score", 0.0)),
+            score=float(result.get("score", 0.0)), 
             followed_instructions=bool(result.get("followed_instructions", False)),
             navigation_quality=str(result.get("navigation_quality", "poor")),
             reasoning=str(result.get("reasoning", "")),
@@ -1486,9 +1431,6 @@ class AggregateMetrics:
         accuracy_by_domain: Dict mapping domain (easy/medium/hard) to mean accuracy
         
         mean_restoration_rate: Average file restoration rate (medium/hard only)
-        
-        mean_faithfulness: Average LLM-judge faithfulness score
-        num_suspected_guessing: Count of tasks flagged for potential guessing
         
         mean_adherence: Average LLM-judge task adherence score
         

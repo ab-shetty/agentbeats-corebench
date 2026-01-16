@@ -29,7 +29,6 @@ import os
 
 import numpy as np
 from scipy.stats import t
-import math
 import uvicorn
 from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
@@ -693,7 +692,7 @@ class CoreBenchEvaluator(GreenAgent):
         directory so tools (especially MCP tools that run with `cwd=self._workspace_dir`)
         have a clean, predictable place to operate.
         """
-        # logger.info(f"Resetting workspace: {self._workspace_dir}")
+        logger.info(f"Resetting workspace: {self._workspace_dir}")
         if os.path.exists(self._workspace_dir):
             shutil.rmtree(self._workspace_dir)
         os.makedirs(self._workspace_dir, exist_ok=True)
@@ -746,7 +745,7 @@ class CoreBenchEvaluator(GreenAgent):
                 else:
                     print(f"[DEBUG] SKIPPING: {rel_path} (Not found)")
         
-        print(f"[DEBUG] Final list of removed paths: {removed_paths}")
+        logger.debug(f"Final list of removed files/folders: {removed_paths}")
         logger.debug(f"Difficulty filters applied: {removed_paths}")
         return removed_paths
 
@@ -1249,7 +1248,7 @@ Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_
 📊 Metrics:
   Accuracy: {aggregate.mean_accuracy:.1%} (written: {aggregate.mean_written_accuracy:.1%}, vision: {aggregate.mean_vision_accuracy:.1%})
   Task Adherence: {aggregate.mean_adherence:.2f}
-  {restoration_line}Suspected Guessing: {aggregate.num_suspected_guessing}/{aggregate.num_tasks}
+  {restoration_line}
 
 ⚡ Efficiency:
   Avg Steps: {aggregate.mean_steps:.1f}
@@ -1415,9 +1414,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # Snapshot capsule state (after difficulty filters) for reproducibility debugging.
         workspace_snapshot_skip_dirs = {
             ".git",
+            ".gitignore",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",
+            ".venv",
+            "venv",
+            "env",
+            "node_modules",
             ".ruff_cache",
             "tool_outputs",  # written by evaluator for long tool outputs
         }
@@ -1443,7 +1447,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         max_protocol_errors = 5
         steps_used = 0
         tool_exec_index = 0
-        final_answer_invalid_count = 0
 
         while not terminated and steps_used < max_steps: # Prevent infinite loops
             turn = steps_used + 1
@@ -1614,151 +1617,16 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     )
                 next_message = self._format_tool_result_for_agent(tool_name=action.name, tool_result=tool_result, index=tool_exec_index)
                 continue
-
+            
             if action.name == RESPOND_ACTION_NAME:
-                # Enforce that the agent answers ALL questions before ending the task.
-                reference = task["results"][0] if task.get("results") else {}
-                required_questions = list(reference.keys())
-                required_question_set = set(required_questions)
-
                 answer = action.arguments.get("content")
                 # Extract token/cost metadata from purple agent
                 answer_metadata = action.arguments.get("_metadata", {})
 
                 if answer is None:
-                    # Be forgiving: some agents place answers directly under arguments instead of arguments.content.
-                    legacy_content = {
-                        k: v for k, v in action.arguments.items()
-                        if k != "_metadata"
-                    }
-                    if legacy_content:
-                        logger.warning(
-                            "FINAL_ANSWER missing arguments.content; treating remaining arguments as answer content"
-                        )
-                        answer = legacy_content
-                    else:
-                        example_key = required_questions[0] if required_questions else "<question>"
-                        final_answer_invalid_count += 1
-                        if final_answer_invalid_count <= 3:
-                            next_message = (
-                                f"Invalid {RESPOND_ACTION_NAME}: missing `arguments.content`.\n\n"
-                                f"Reply again with <json>{{\"name\": \"{RESPOND_ACTION_NAME}\", \"arguments\": {{\"content\": {{\"{example_key}\": <value>}}}}}}</json>.\n"
-                            )
-                            continue
-                        logger.warning(
-                            "Too many invalid FINAL_ANSWER submissions (missing content); proceeding with empty answer"
-                        )
-                        answer = {}
-                        break
-
-                if not isinstance(answer, dict):
-                    example_key = required_questions[0] if required_questions else "<question>"
-                    final_answer_invalid_count += 1
-                    if final_answer_invalid_count <= 3:
-                        next_message = (
-                            f"Invalid {RESPOND_ACTION_NAME}: `arguments.content` must be a JSON object.\n\n"
-                            f"Use the EXACT QUESTION TEXT as keys (copy from the prompt), not keys like \"status\" or \"output\".\n\n"
-                            f"Reply again with <json>{{\"name\": \"{RESPOND_ACTION_NAME}\", \"arguments\": {{\"content\": {{\"{example_key}\": <value>}}}}}}</json>.\n"
-                        )
-                        continue
-                    logger.warning(
-                        "Too many invalid FINAL_ANSWER submissions (non-object content); proceeding with empty answer"
-                    )
+                    logger.warning(f"FINAL_ANSWER missing content; proceeding with empty answer")
                     answer = {}
-                    break
 
-                # Normalize keys (strip whitespace) and keep only string/int keys.
-                normalized_answer: dict[str, Any] = {}
-                for key, value in answer.items():
-                    if isinstance(key, str):
-                        key_str = key.strip()
-                    elif isinstance(key, int):
-                        key_str = str(key)
-                    else:
-                        continue
-                    normalized_answer[key_str] = value
-
-                # Legacy compatibility: if the agent used numeric keys ("1", "2", ...), map them to question text by index.
-                # (Only do this when no exact question-text keys were provided.)
-                has_question_keys = any(k in required_question_set for k in normalized_answer.keys())
-                numeric_keyed = {k: v for k, v in normalized_answer.items() if k.isdigit()}
-                if not has_question_keys and numeric_keyed:
-                    mapped: dict[str, Any] = {}
-                    for k, v in numeric_keyed.items():
-                        idx = int(k) - 1
-                        if 0 <= idx < len(required_questions):
-                            mapped[required_questions[idx]] = v
-                    logger.warning(
-                        "FINAL_ANSWER used numeric keys; mapping by index to question-text keys"
-                    )
-                    normalized_answer = mapped
-
-                # Keep only required question keys.
-                filtered_answer = {k: v for k, v in normalized_answer.items() if k in required_question_set}
-                if filtered_answer != normalized_answer:
-                    dropped = sorted(set(normalized_answer.keys()) - set(filtered_answer.keys()))
-                    if dropped:
-                        logger.warning(f"Dropping unexpected answer keys: {dropped}")
-
-                missing_questions = [q for q in required_questions if q not in filtered_answer]
-                if missing_questions:
-                    final_answer_invalid_count += 1
-                    if final_answer_invalid_count <= 3:
-                        example_content = {q: "<value>" for q in required_questions}
-                        next_message = (
-                            f"Invalid {RESPOND_ACTION_NAME}: missing answers for {len(missing_questions)} required question(s).\n\n"
-                            f"Missing question keys:\n- " + "\n- ".join(missing_questions) + "\n\n"
-                            f"Reply again with {RESPOND_ACTION_NAME} including ALL required questions as keys.\n\n"
-                            f"<json>\n"
-                            f"{json.dumps({'name': RESPOND_ACTION_NAME, 'arguments': {'content': example_content}}, indent=2)}\n"
-                            f"</json>\n"
-                        )
-                        continue
-                    logger.warning(
-                        "Too many invalid FINAL_ANSWER submissions (missing keys); proceeding with partial answer"
-                    )
-                    answer = filtered_answer
-                    break
-
-                # Type-check numeric questions so the agent cannot submit summaries like "output from the script".
-                # This does NOT reveal the correct value; it only enforces the expected type.
-                numeric_type_errors: list[str] = []
-                for i, question_text in enumerate(required_questions, start=1):
-                    expected_value = reference.get(question_text)
-                    submitted_value = filtered_answer.get(question_text)
-
-                    expects_numeric = isinstance(expected_value, (int, float, np.integer, np.floating))
-                    if not expects_numeric:
-                        continue
-
-                    if isinstance(submitted_value, (int, float, np.integer, np.floating)):
-                        continue
-                    if isinstance(submitted_value, str):
-                        cleaned = submitted_value.strip().replace("%", "")
-                        try:
-                            float(cleaned)
-                            continue
-                        except ValueError:
-                            pass
-
-                    preview = str(submitted_value)
-                    if len(preview) > 80:
-                        preview = preview[:80] + "..."
-                    question_snippet = question_text if len(question_text) <= 80 else question_text[:77] + "..."
-                    numeric_type_errors.append(f'Q{i} ("{question_snippet}") expects a number; got "{preview}"')
-
-                if numeric_type_errors:
-                    # Don't block task completion on type errors; log and continue.
-                    logger.warning(
-                        "FINAL_ANSWER contains non-numeric values for numeric questions:\n- %s",
-                        "\n- ".join(numeric_type_errors),
-                    )
-
-                if filtered_answer != answer:
-                    logger.warning(
-                        "FINAL_ANSWER contained unexpected keys; keeping only required question-text keys"
-                    )
-                    answer = filtered_answer
                 logger.info(f"FINAL ANSWER type: {type(answer)}")
                 logger.info(f"FINAL ANSWER: {answer}")
                 if answer_metadata:
@@ -1773,7 +1641,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                             "metadata": answer_metadata,
                         }
                     )
-
                 if removed_by_difficulty_filters:
                     try:
                         final_files, final_dirs = self._snapshot_tree_paths(
@@ -1782,6 +1649,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                         created_files = sorted(final_files - baseline_files - {f for f in final_files if 'venv' in f.split(os.sep)} )
                         # ignore venv files in reproducability debug
                         created_dirs = sorted(final_dirs - baseline_dirs - {d for d in final_dirs if 'venv' in d.split(os.sep)})
+                        logger.debug("Created files: %s", created_files)
+                        logger.debug("Created dirs: %s", created_dirs)
 
                         logger.info(
                             "📁 Reproducibility debug: %d new files, %d new dirs under capsule root",
@@ -2264,9 +2133,9 @@ async def main():
     # Setup shared logging
     log_file = setup_logging("evaluator")
     
-    #logger.info(f"Starting CoreBench Evaluator")
-    #logger.info(f"Host: {args.host}, Port: {args.port}")
-    #logger.info(f"Log file: {log_file}")
+    logger.info(f"Starting CoreBench Evaluator")
+    logger.info(f"Host: {args.host}, Port: {args.port}")
+    logger.info(f"Log file: {log_file}")
 
     agent_url = args.card_url or f"http://{args.host}:{args.port}/"
 

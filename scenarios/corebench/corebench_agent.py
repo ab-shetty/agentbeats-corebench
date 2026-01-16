@@ -478,12 +478,11 @@ class CoreBenchPurpleAgent(AgentExecutor):
         now = time.time()
         self.ctx_id_last_seen[context.context_id] = now
         self._gc_contexts(now=now, keep_ctx=context.context_id)
-
         logger.info(f"=" * 80)
         logger.info(f"PURPLE AGENT - NEW REQUEST")
         logger.info(f"=" * 80)
-        # logger.info(f"Context ID: {context.context_id}")
-        # logger.info(f"Input length: {len(user_input)} chars")
+        logger.info(f"Context ID: {context.context_id}")
+        logger.info(f"Input length: {len(user_input)} chars")
         logger.debug(f"Full input: {user_input}")
 
         # Initialize purple agent conversation
@@ -591,6 +590,20 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 messages.append(
                     {"role": "assistant", "content": assistant_content}
                 )
+                
+                # Detect and warn about multi-tool spam
+                json_block_count = assistant_content.count("<json>")
+                if json_block_count > 1:
+                    logger.warning(f"Agent output {json_block_count} JSON blocks; only first will be executed")
+                    # Add feedback so model learns to stop doing this
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"WARNING: You output {json_block_count} tool calls in one response. "
+                            "Only the FIRST one was executed. You must wait for each tool's result "
+                            "before calling the next tool. One tool call per response only."
+                        )
+                    })
 
                 # Check for structured JSON tool intent
                 tool_call = self._parse_tool_call(assistant_content)
@@ -618,179 +631,6 @@ Example:
                     })
                     continue
 
-                # Extra enforcement for FINAL_ANSWER: ensure arguments.content exists and is non-empty.
-                if tool_call.get("name") == "FINAL_ANSWER":
-                    arguments = tool_call.get("arguments") or {}
-
-                    # If the model put answers directly under arguments, coerce into arguments.content.
-                    if "content" not in arguments and isinstance(arguments, dict):
-                        coerced_content: dict[str, Any] = {}
-                        for k, v in arguments.items():
-                            if k == "_metadata":
-                                continue
-                            if isinstance(k, int):
-                                key_str = str(k)
-                            elif isinstance(k, str):
-                                key_str = k.strip()
-                            else:
-                                continue
-                            if key_str:
-                                coerced_content[key_str] = v
-                        tool_call["arguments"] = {
-                            "content": coerced_content,
-                            **({"_metadata": arguments["_metadata"]} if "_metadata" in arguments else {}),
-                        }
-                        arguments = tool_call["arguments"]
-
-                    task_prompt = self.ctx_id_to_task_prompt.get(context.context_id, "")
-                    required_questions = self._extract_required_question_keys(task_prompt)
-                    required_question_set = set(required_questions)
-
-                    raw_content = arguments.get("content")
-                    if not isinstance(raw_content, dict):
-                        raw_content = {}
-
-                    # Normalize content keys.
-                    content: dict[str, Any] = {}
-                    for k, v in raw_content.items():
-                        if isinstance(k, int):
-                            key_str = str(k)
-                        elif isinstance(k, str):
-                            key_str = k.strip()
-                        else:
-                            continue
-                        if key_str:
-                            content[key_str] = v
-
-                    # Legacy compatibility: map numeric keys ("1") or numbered keys ("1. ...") by index.
-                    if required_questions and content:
-                        mapped: dict[str, Any] = {}
-                        for k, v in content.items():
-                            if k in required_question_set:
-                                mapped[k] = v
-                                continue
-
-                            if k.isdigit():
-                                idx = int(k) - 1
-                                if 0 <= idx < len(required_questions):
-                                    mapped[required_questions[idx]] = v
-                                continue
-
-                            m = re.match(r"^(?:q)?(\d+)\s*[\.\):]\s*(.*)$", k, flags=re.IGNORECASE)
-                            if m:
-                                idx = int(m.group(1)) - 1
-                                if 0 <= idx < len(required_questions):
-                                    mapped[required_questions[idx]] = v
-                                continue
-
-                            mapped[k] = v
-                        content = mapped
-
-                    # Filter out unexpected keys to reduce evaluator warnings.
-                    filtered_content = (
-                        {k: v for k, v in content.items() if k in required_question_set}
-                        if required_questions
-                        else content
-                    )
-
-                    max_rejections = 2
-                    rejection_count = self.ctx_id_to_final_answer_rejections.get(context.context_id, 0)
-
-                    def _reject_final_answer(*, reason: str, prompt: str) -> bool:
-                        nonlocal rejection_count
-                        if rejection_count >= max_rejections:
-                            logger.warning(
-                                "FINAL_ANSWER enforcement: too many rejections (%d); allowing submission (%s)",
-                                rejection_count,
-                                reason,
-                            )
-                            return False
-                        rejection_count += 1
-                        self.ctx_id_to_final_answer_rejections[context.context_id] = rejection_count
-                        messages.append({"role": "user", "content": prompt})
-                        return True
-
-                    # Require at least one tool result before answering (prevents blind guessing).
-                    saw_tool_result = any(
-                        m.get("role") == "user"
-                        and isinstance(m.get("content"), str)
-                        and "Tool execution result" in m.get("content")
-                        for m in messages
-                    )
-
-                    # Reject obvious placeholder answers.
-                    def _looks_like_placeholder(v: Any) -> bool:
-                        if not isinstance(v, str):
-                            return False
-                        s = v.strip()
-                        if not s:
-                            return True
-                        if re.fullmatch(r"value\\d+", s, flags=re.IGNORECASE):
-                            return True
-                        if "<" in s and ">" in s:
-                            return True
-                        return False
-
-                    if not saw_tool_result:
-                        if _reject_final_answer(
-                            reason="no_tool_result",
-                            prompt=(
-                                "Do NOT guess. You must request tools and read outputs before FINAL_ANSWER.\n\n"
-                                "Start with a tool call like:\n"
-                                "<json>\n"
-                                "{\"name\":\"execute_bash\",\"arguments\":{\"command\":\"ls -R\"}}\n"
-                                "</json>"
-                            ),
-                        ):
-                            continue
-
-                    if not filtered_content:
-                        example_key = required_questions[0] if required_questions else "question text here"
-                        if _reject_final_answer(
-                            reason="empty_content",
-                            prompt=(
-                                "Your FINAL_ANSWER is invalid for this benchmark.\n\n"
-                                "Reply with:\n"
-                                "<json>\n"
-                                f"{{\"name\":\"FINAL_ANSWER\",\"arguments\":{{\"content\":{{\"{example_key}\":<ACTUAL_VALUE>}}}}}}\n"
-                                "</json>\n\n"
-                                "Rules:\n"
-                                "- `arguments.content` must be a NON-EMPTY JSON object\n"
-                                "- Keys must be the EXACT question text strings from the prompt\n"
-                                "- Values must be the extracted answers (no placeholders like \"value1\")"
-                            ),
-                        ):
-                            continue
-
-                    if required_questions:
-                        missing_questions = [q for q in required_questions if q not in filtered_content]
-                        if missing_questions:
-                            missing_preview = missing_questions[:12]
-                            more = "" if len(missing_questions) <= 12 else f"\n... ({len(missing_questions) - 12} more)"
-                            if _reject_final_answer(
-                                reason="missing_keys",
-                                prompt=(
-                                    "Your FINAL_ANSWER is missing required question keys.\n\n"
-                                    "Missing:\n- " + "\n- ".join(missing_preview) + more + "\n\n"
-                                    "Do NOT submit FINAL_ANSWER until you have answers for ALL questions.\n"
-                                    "Use tools to extract the missing values, then reply with FINAL_ANSWER using the EXACT question text as keys."
-                                ),
-                            ):
-                                continue
-
-                    if all(_looks_like_placeholder(v) for v in filtered_content.values()):
-                        if _reject_final_answer(
-                            reason="placeholders",
-                            prompt=(
-                                "Your FINAL_ANSWER contains placeholder values.\n\n"
-                                "Go back, use tools to locate the exact values in files, then reply with FINAL_ANSWER "
-                                "containing the real extracted numbers/labels only."
-                            ),
-                        ):
-                            continue
-
-                    tool_call["arguments"]["content"] = filtered_content
-
                 # Add token metadata for FINAL_ANSWER
                 if tool_call.get("name") == "FINAL_ANSWER":
                     tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
@@ -811,9 +651,8 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                # logger.info("Response sent successfully")
-                
-                # Mark completion but keep state briefly (evaluator may reject and reprompt).
+                logger.info("Response sent successfully")
+
                 if tool_call.get("name") == "FINAL_ANSWER":
                     self.ctx_id_done.add(context.context_id)
                 return
@@ -831,7 +670,9 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                self.ctx_id_done.add(context.context_id)
+                # Cleanup: Free memory after error fallback
+                self.ctx_id_to_messages.pop(context.context_id, None)
+                self.ctx_id_to_tokens.pop(context.context_id, None)
                 return
 
         # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
@@ -844,6 +685,8 @@ Example:
                 context_id=context.context_id,
             )
         )
+        # Cleanup: Free memory after max_turns fallback
+        self.ctx_id_to_messages.pop(context.context_id, None)
         self.ctx_id_done.add(context.context_id)
         return
 
