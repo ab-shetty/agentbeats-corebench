@@ -151,6 +151,7 @@ agentbeats-corebench/
 │       ├── corebench_evaluator.py # Green agent - orchestrates tasks, evaluates results
 │       ├── mcp_server.py          # MCP tool server (file ops, bash, etc.)
 │       ├── mdconvert.py           # Markdown/document conversion utilities
+│       ├── planning_prompts.yaml  # ReAct planning prompts (from smolagents MultiStepAgent)
 │       ├── shared_logging.py      # Centralized logging setup
 │       └── workspace/             # Cloned repos & task execution sandbox
 ├── src/agentbeats/
