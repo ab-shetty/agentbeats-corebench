@@ -2,36 +2,29 @@
 CoreBench Evaluation Metrics Module
 ====================================
 
-This module provides clean, well-defined metrics for evaluating the purple agent's performance
+This module provides metrics for evaluating the purple agent's performance
 on the CoreBench reproducibility benchmark. The benchmark (agentified for AgentBeats) tests
 whether agents can reproduce both the environment and results of published research papers.
 
-Metrics Overview
-----------------
-
-1. **ACCURACY** - Are the submitted answers correct compared to ground truth?
+**ACCURACY** - Are the submitted answers correct compared to ground truth?
    - Numeric values: Uses 95% prediction intervals to handle run-to-run variance
      in stochastic experiments (e.g., ML training with different random seeds).
      The interval is computed using t-distribution: mean ± t(0.975, n-1) * std * sqrt(1 + 1/n)
    - String values: Case-insensitive exact match after stripping whitespace
    - List values: Element-wise exact comparison (order matters, types matter)
    
-2. **REPRODUCIBILITY** - Did the agent successfully restore removed files/folders?
+**REPRODUCIBILITY** - Did the agent successfully restore removed files/folders?
    - Only applicable for medium/hard difficulty levels where files are removed
    - Quality checks: Files must have content (>= 10 bytes), directories must not be empty
    - Tracks executable permissions for scripts (informational)
 
-3. **FAITHFULNESS** (LLM-as-Judge) - Are answers grounded in tool execution evidence?
-   - Evaluates whether submitted answers can be traced back to actual tool outputs
-   - Detects guessing, hallucination, or simulation behaviors
-   - Returns score 0.0-1.0 plus boolean flags for grounding and suspected guessing
-
-4. **TASK ADHERENCE** (LLM-as-Judge) - Did the agent properly follow task instructions?
+   
+**TASK ADHERENCE** (LLM-as-Judge) - Did the agent properly follow task instructions?
    - Evaluates navigation strategy, rule compliance, and problem-solving approach
    - Assesses how well the agent understood and executed the task
    - Returns qualitative assessment (excellent/good/fair/poor) plus strengths/weaknesses
 
-5. **EFFICIENCY** - How resource-efficient was the agent's approach?
+**EFFICIENCY** - How resource-efficient was the agent's approach?
    - Steps used vs maximum allowed
    - Tool call count and execution time
    - Protocol/format errors encountered
@@ -41,7 +34,6 @@ Usage
 The main entry points are:
 - evaluate_accuracy(ground_truth, submitted) -> AccuracyMetrics
 - evaluate_reproducibility(workspace_dir, removed_paths) -> ReproducibilityMetrics  
-- evaluate_faithfulness(...) -> FaithfulnessMetrics (async, uses LLM)
 - evaluate_task_adherence(...) -> TaskAdherenceMetrics (async, uses LLM)
 - compute_efficiency(...) -> EfficiencyMetrics
 - aggregate_results(evaluations) -> AggregateMetrics
@@ -52,14 +44,11 @@ Ground truth is expected as a list of dicts from multiple experiment runs:
 [
     {"question1": 0.95, "question2": "label", ...},  # Run 1
     {"question1": 0.93, "question2": "label", ...},  # Run 2
-    ...
 ]
-
-For single-run experiments, provide a list with one dict.
 """
 
-from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from dataclasses import dataclass, asdict
+from typing import Any, Callable, Optional
 import json
 import logging
 import math
@@ -100,12 +89,6 @@ def _is_vision_question(key: str) -> bool:
     
     Based on CORE-Bench paper definition: questions requiring extraction of
     results from figures, graphs, plots, charts, or images.
-    
-    Args:
-        key: Question identifier (e.g., "accuracy_fig1", "plot_error_rate")
-        
-    Returns:
-        True if the key suggests a vision-based question
     """
     return bool(_VISION_KEY_PATTERN.search(key))
 
@@ -180,34 +163,19 @@ class AccuracyMetrics:
 
 @dataclass
 class ReproducibilityMetrics:
-    """Metrics for file/environment restoration."""
-    targets: list[str]  # Files/folders that were removed by difficulty filter
-    restored: list[str]  # Successfully restored paths
-    missing: list[str]   # Paths that were not restored
-    restoration_rate: float
-    # weighted_score: float  # MAYBE IMPLEMENT LATER weight by importance
-    details: list[dict[str, Any]]  # Per-path metadata
+    """Did the agent successfully produce outputs?"""
+    success: bool                    # Primary metric: did they produce results?
+    results_dir_exists: bool
+    num_output_files: int
+    total_output_bytes: int
+    output_files: list[str]
+    reason: str
     
     @property
-    def targets_count(self) -> int:
-        return len(self.targets)
-    
-    @property
-    def restored_count(self) -> int:
-        return len(self.restored)
+    def restoration_rate(self) -> float:
+        """For backwards compatibility with aggregate."""
+        return 1.0 if self.success else 0.0
 
-
-@dataclass
-class FaithfulnessMetrics:
-    """LLM-as-Judge metrics for answer grounding."""
-    score: float  # 0.0-1.0
-    is_grounded: bool
-    suspected_guessing: bool
-    reasoning: str
-    evidence_summary: str
-    flagged_answers: list[str]  # Questions with suspicious answers
-    status: str = "success"  # "success" or "error"
-    error_message: Optional[str] = None
 
 
 @dataclass
@@ -224,8 +192,6 @@ class TaskAdherenceMetrics:
         reasoning: LLM judge's explanation of the assessment
         strengths: List of things the agent did well
         weaknesses: List of areas for improvement
-        status: "success" if evaluation completed, "error" if API call failed
-        error_message: Error details if status is "error", None otherwise
     """
     score: float  # 0.0-1.0
     followed_instructions: bool
@@ -269,7 +235,6 @@ class TaskEvaluation:
 
     accuracy: AccuracyMetrics
     reproducibility: Optional[ReproducibilityMetrics]
-    faithfulness: FaithfulnessMetrics
     task_adherence: TaskAdherenceMetrics
     efficiency: EfficiencyMetrics
 
@@ -291,7 +256,6 @@ class TaskEvaluation:
             "success": self.success,
             "accuracy": asdict(self.accuracy),
             "reproducibility": asdict(self.reproducibility) if self.reproducibility else None,
-            "faithfulness": asdict(self.faithfulness),
             "task_adherence": asdict(self.task_adherence),
             "efficiency": asdict(self.efficiency),
             "task_cost": self.task_cost,
@@ -318,13 +282,15 @@ def evaluate_accuracy(
     Args:
         ground_truth: List of result dicts from multiple runs (from core_test.json)
         submitted: Agent's submitted answer dict
-        
-    Returns:
-        AccuracyMetrics with detailed breakdown
     """
     if not ground_truth or not ground_truth[0]:
             logger.error("Empty or invalid ground truth provided")
             return _empty_accuracy_metrics()
+    
+    # Ensure submitted is a dict (handle malformed answers like int, str, etc.)
+    if not isinstance(submitted, dict):
+        logger.warning(f"Submitted answer is not a dict (got {type(submitted).__name__}), treating as empty")
+        submitted = {}
     
     # Normalize submitted answers (handle % signs, convert strings to numbers where possible)
     submitted = _normalize_submitted(submitted.copy() if submitted else {})
@@ -336,7 +302,7 @@ def evaluate_accuracy(
     list_keys = [k for k, v in reference.items() if isinstance(v, list)]
     
     required_questions = list(reference.keys())
-    
+
     # Calculate prediction intervals for numeric values
     prediction_intervals = _compute_prediction_intervals(ground_truth, numeric_keys)
     
@@ -679,301 +645,118 @@ MIN_FILE_SIZE_BYTES = 10
 # File extensions that should have executable permission
 EXECUTABLE_EXTENSIONS = {".sh", ".py", ".pl", ".rb", ".bash"}
 
-
 def evaluate_reproducibility(
     workspace_dir: str,
-    removed_paths: list[str],
+    results_dir_rel: str = "environment/results",
 ) -> ReproducibilityMetrics:
-    """
-    Evaluate how well the agent restored files removed by difficulty filters.
-    
-    For medium/hard difficulties, certain files (results/, REPRODUCING.md, run scripts)
-    are removed before the task starts. This metric measures what percentage the
-    agent successfully recreated with meaningful content.
-    
-    Restoration Criteria:
-    - Files must exist AND have size >= MIN_FILE_SIZE_BYTES (10 bytes)
-    - Directories must exist AND contain at least one entry
-    - Scripts (.sh, .py, etc.) should ideally be executable (logged but not required)
-    
-    Args:
-        workspace_dir: Path to the workspace directory
-        removed_paths: List of relative paths that were removed
-        
-    Returns:
-        ReproducibilityMetrics with restoration details including quality checks
-    """
+    """Check if agent produced outputs in results/."""
     from pathlib import Path
-    import stat
     
-    targets = sorted(set(removed_paths))
-    workspace = Path(workspace_dir)
+    MIN_FILE_SIZE = 10
+    results_path = Path(workspace_dir) / results_dir_rel
     
-    restored = []
-    missing = []
-    details = []
+    if not results_path.exists():
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=False,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results/ not created",
+        )
     
-    for rel_path in targets:
-        abs_path = workspace / rel_path
-        exists = abs_path.exists()
-        
-        meta = {
-            "path": rel_path,
-            "exists": exists,
-            "kind": "missing",
-            "valid": False,  # True only if restoration meets quality criteria
-            "issues": [],    # List of quality issues found
-        }
-        
-        if exists:
-            if abs_path.is_file():
-                meta["kind"] = "file"
-                file_stat = abs_path.stat()
-                meta["size_bytes"] = file_stat.st_size
-                
-                # Check file size - empty files don't count
-                if file_stat.st_size >= MIN_FILE_SIZE_BYTES:
-                    meta["valid"] = True
-                else:
-                    meta["issues"].append(f"file too small ({file_stat.st_size} bytes < {MIN_FILE_SIZE_BYTES})")
-                
-                # Check executable permission for scripts (informational)
-                suffix = abs_path.suffix.lower()
-                if suffix in EXECUTABLE_EXTENSIONS:
-                    is_executable = bool(file_stat.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
-                    meta["is_executable"] = is_executable
-                    if not is_executable:
-                        meta["issues"].append("script not executable (chmod +x recommended)")
-                        # Note: we still count it as valid if size is OK
-                        
-            elif abs_path.is_dir():
-                meta["kind"] = "dir"
-                try:
-                    num_entries = sum(1 for _ in abs_path.iterdir())
-                    meta["num_entries"] = num_entries
-                    
-                    # Empty directories don't count as restored
-                    if num_entries > 0:
-                        meta["valid"] = True
-                    else:
-                        meta["issues"].append("directory is empty")
-                except OSError as e:
-                    meta["num_entries"] = -1
-                    meta["issues"].append(f"cannot read directory: {e}")
-            else:
-                meta["kind"] = "other"
-                meta["valid"] = True  # Symlinks, etc. - give benefit of doubt
-            
-            # Only count as restored if it passes quality checks
-            if meta["valid"]:
-                restored.append(rel_path)
-            else:
-                missing.append(rel_path)
-                logger.warning(f"Restoration quality issue for '{rel_path}': {meta['issues']}")
-        else:
-            missing.append(rel_path)
-        
-        details.append(meta)
+    if not results_path.is_dir():
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=False,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results exists but not a directory",
+        )
     
-    rate = len(restored) / len(targets) if targets else 0.0
+    output_files = []
+    total_bytes = 0
+    
+    for f in results_path.rglob("*"):
+        if f.is_file():
+            try:
+                size = f.stat().st_size
+                if size >= MIN_FILE_SIZE:
+                    output_files.append(str(f.relative_to(results_path)))
+                    total_bytes += size
+            except OSError:
+                continue
+    
+    if not output_files:
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=True,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results/ is empty or has only trivial files",
+        )
     
     return ReproducibilityMetrics(
-        targets=targets,
-        restored=restored,
-        missing=missing,
-        restoration_rate=rate,
-        details=details,
+        success=True,
+        results_dir_exists=True,
+        num_output_files=len(output_files),
+        total_output_bytes=total_bytes,
+        output_files=output_files[:50],
+        reason=f"produced {len(output_files)} files ({total_bytes:,} bytes)",
     )
-
-
-# =============================================================================
-# FAITHFULNESS EVALUATION (LLM-as-Judge)
-# =============================================================================
-
-FAITHFULNESS_PROMPT = """You are an expert evaluator assessing whether an AI agent's answers are grounded in evidence.
-
-## Task Context
-The agent was given a reproducibility task to execute code from a scientific paper and answer questions about the results.
-
-## Evaluation Criteria
-A faithful answer is one that:
-1. Can be directly traced to tool execution outputs (bash commands, file reads, etc.)
-2. Uses actual values from experiment results, not guesses or simulations
-3. Does not hallucinate or fabricate data
-
-Red flags for unfaithful answers:
-- Answers provided without corresponding tool evidence
-- Using random/simulated values instead of actual execution results
-- Phrases like "I'll simulate", "let's assume", "approximately" without evidence
-- Answering questions about files/results that were never accessed
-
-## Input
-Questions asked: {questions}
-
-Submitted answers:
-{submitted_answers}
-
-Tool calls and outputs (summarized):
-{tool_summary}
-
-## Output
-Respond in JSON format:
-{{
-    "score": <float 0.0-1.0>,
-    "is_grounded": <boolean>,
-    "suspected_guessing": <boolean>,
-    "reasoning": "<explanation of your assessment>",
-    "evidence_summary": "<brief summary of what evidence supports the answers>",
-    "flagged_answers": ["<list of question keys with suspicious answers>"]
-}}
-"""
-
-
-async def evaluate_faithfulness(
-    questions: list[str],
-    submitted: dict[str, Any],
-    tool_calls: list[dict[str, Any]],
-    tool_results: list[dict[str, str]],
-    judge_model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-) -> FaithfulnessMetrics:
-    """
-    Use LLM-as-judge to evaluate whether answers are grounded in evidence.
-    
-    Args:
-        questions: List of required question keys
-        submitted: Agent's submitted answers
-        tool_calls: List of tool calls made by the agent
-        tool_results: List of tool execution results
-        judge_model: LLM model to use as judge (same format as purple agent)
-        
-    Returns:
-        FaithfulnessMetrics from LLM evaluation
-    """
-    # Build tool summary (truncate long outputs)
-    tool_summary = _build_tool_summary(tool_calls, tool_results)
-    
-    prompt = FAITHFULNESS_PROMPT.format(
-        questions=json.dumps(questions, indent=2),
-        submitted_answers=json.dumps(submitted, indent=2),
-        tool_summary=tool_summary,
-    )
-    
-    # Use same API configuration as purple agent
-    # If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM
-    # Otherwise → Nebius API
-    api_base = (os.environ.get("COREBENCH_TEXT_API_BASE") or "").strip()
-    api_key = (os.environ.get("COREBENCH_TEXT_API_KEY") or os.environ.get("NEBIUS_API_KEY") or "").strip()
-    
-    if not api_base:
-        # Use Nebius API
-        api_base = "https://api.tokenfactory.nebius.com/v1/"
-        api_key = os.environ.get("NEBIUS_API_KEY", "")
-    
-    if not api_key:
-        logger.error("No API key found for LLM-as-judge (need COREBENCH_TEXT_API_KEY or NEBIUS_API_KEY)")
-        return FaithfulnessMetrics(
-            score=0.0,
-            is_grounded=False,
-            suspected_guessing=True,
-            reasoning="Evaluation failed: No API key configured",
-            evidence_summary="",
-            flagged_answers=[],
-        )
-    
-    # LiteLLM needs openai/ prefix for custom api_base with OpenAI-compatible APIs
-    model_name = judge_model
-    if not model_name.startswith("openai/"):
-        model_name = f"openai/{judge_model}"
-    
-    logger.debug(f"LLM-as-judge: model={model_name}, api_base={api_base}")
-    
-    try:
-        response = await litellm.acompletion(
-            model=model_name,
-            api_base=api_base,
-            api_key=api_key,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-        )
-        
-        result = json.loads(response.choices[0].message.content)
-        
-        return FaithfulnessMetrics(
-            score=float(result.get("score", 0.0)),
-            is_grounded=bool(result.get("is_grounded", False)),
-            suspected_guessing=bool(result.get("suspected_guessing", True)),
-            reasoning=str(result.get("reasoning", "")),
-            evidence_summary=str(result.get("evidence_summary", "")),
-            flagged_answers=list(result.get("flagged_answers", [])),
-        )
-        
-    except Exception as e:
-        logger.error(f"Faithfulness evaluation failed: {e}")
-        return FaithfulnessMetrics(
-            score=0.0, # Neutral score, but marked as error
-            status="error",
-            error_message=str(e),
-            is_grounded=False,
-            suspected_guessing=False,
-            reasoning=f"Evaluation failed due to API error: {e}",
-            evidence_summary="",
-            flagged_answers=[],
-        )
-
-
-def _build_tool_summary(
-    tool_calls: list[dict], 
-    tool_results: list[dict],
-    max_chars: int = 8000,
-) -> str:
-    """Build a summarized view of tool calls and results."""
-    lines = []
-    
-    for i, (call, result) in enumerate(zip(tool_calls, tool_results), 1):
-        tool_name = call.get("tool", "unknown")
-        args = call.get("arguments", {})
-        output = result.get("result", "")
-        
-        # Truncate long outputs
-        if len(output) > 500:
-            output = output[:250] + "\n...[truncated]...\n" + output[-250:]
-        
-        lines.append(f"[{i}] {tool_name}")
-        if args:
-            lines.append(f"    Args: {json.dumps(args)[:200]}")
-        lines.append(f"    Output: {output}")
-        lines.append("")
-    
-    summary = "\n".join(lines)
-    
-    if len(summary) > max_chars:
-        summary = summary[:max_chars] + "\n...[summary truncated]..."
-    
-    return summary if summary.strip() else "(No tool calls made)"
-
 
 # =============================================================================
 # TASK ADHERENCE EVALUATION (LLM-as-Judge)
+# judge gets passed tool calls + results
 # =============================================================================
+TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI agent executed a computational reproducibility benchmark task.
 
-TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI agent executed a reproducibility benchmark task.
+## CORE PRINCIPLE
+CoreBench measures COMPUTATIONAL REPRODUCIBILITY - the ability to re-run scientific code and reproduce results.
+- Reading pre-existing results is NOT reproduction (even if answer is correct)
+- Following the correct process is more important than getting the right answer
+- task_adherence measures PROCESS FIDELITY, not outcome correctness
 
 ## Task Context
 Domain: {domain}
 Task prompt: {task_prompt}
+{capsule_context}
 
-The agent needed to:
-1. Navigate the codebase and understand the project structure
-2. Follow reproduction instructions (e.g., REPRODUCING.md, run scripts)
-3. Execute the code to generate results
-4. Extract answers to specific questions from the results
+## Domain-Specific Success Criteria
 
-## Evaluation Criteria
-Rate the agent on:
-1. **Instruction Following**: Did it follow the task prompt and any documentation?
-2. **Navigation Strategy**: How well did it explore and understand the codebase?
-3. **Problem Solving**: How did it handle errors and obstacles?
-4. **Rule Compliance**: Did it use tools appropriately without shortcuts or cheating?
+### MEDIUM MODE (corebench_medium)
+**Gold Standard:** Read README.md → Execute documented command (usually Docker) → Handle errors → Generate output
+
+**Automatic Disqualifiers (cap score at 0.3):**
+- Never read README.md
+- Read pre-existing results instead of executing
+- Never attempted documented command
+
+### HARD MODE (corebench_hard)
+**Gold Standard:** Check Dockerfile/README → Infer execution method → Attempt Docker/script execution → Debug errors → Generate output
+
+**Automatic Disqualifiers (cap score at 0.3):**
+- Never explored documentation (Dockerfile/README)  
+- Read pre-existing results instead of executing
+- Never attempted to run scripts
+- Made no effort to resolve dependency errors
+
+### EASY MODE (corebench_easy)
+**Gold Standard:** List results/ directory → Read output files → Extract exact values → DO NOT execute code
+
+**Disqualifiers:**
+- Attempted to run scripts or install dependencies
+
+## Scoring Rubric (0.0 - 1.0)
+
+### Component Weights
+- **Core Process (50%)**: Did agent follow the primary reproduction workflow?
+- **Problem Solving (25%)**: How well did agent handle obstacles?
+- **Discovery (15%)**: How efficiently did agent find needed information?
+- **Technical Execution (10%)**: Proper tool usage and commands
+
 
 ## Execution Trace
 Steps taken: {steps_used}
@@ -983,55 +766,285 @@ Command timeouts: {command_timeouts}
 
 {timeout_note}
 
-Key actions (summarized):
-{action_summary}
+Tool calls + results:
+{tool_interactions}
 
-Final answer provided: {has_answer}
+Final answer: {has_answer}
 Answer correctness: {answer_summary}
 
-## Output
-Respond in JSON format:
+## Your Task
+
+1. Assign component scores to the trace: Core _/50, Problem _/25, Discovery _/15, Technical _/10
+2. Check for automatic penalties
+3. Calculate final score and write reasoning
+
+## Output Format
+```json
 {{
     "score": <float 0.0-1.0>,
     "followed_instructions": <boolean>,
     "navigation_quality": "<excellent|good|fair|poor>",
-    "reasoning": "<detailed explanation>",
-    "strengths": ["<list of things done well>"],
-    "weaknesses": ["<list of areas for improvement>"]
+    "reasoning": "<Decision Tree path + component breakdown + penalties>",
+    "component_scores": {{
+        "core_process": "<X/50>",
+        "problem_solving": "<X/25>",
+        "discovery": "<X/15>",
+        "technical": "<X/10>"
+    }},
+    "penalties_applied": ["<list any penalties>"],
+    "strengths": ["<specific behaviors>"],
+    "weaknesses": ["<specific gaps>"]
 }}
+```
 """
+
+def _read_text_file_head_bytes(path: str, max_bytes: int) -> tuple[str, bool, int]:
+    with open(path, "rb") as f:
+        data = f.read(max_bytes + 1)
+    truncated = len(data) > max_bytes
+    consumed = min(len(data), max_bytes)
+    text = data[:max_bytes].decode("utf-8", errors="replace")
+    return text, truncated, consumed
+
+
+_README_FILENAME_RE = re.compile(r"^readme(?:\\.[a-z0-9]+)?$", re.IGNORECASE)
+_INCLUDE_DOC_EXTENSIONS = {"", ".md", ".markdown", ".txt", ".rst"}
+_EXCLUDE_DOC_EXTENSIONS = {".pdf"}
+
+
+def _capsule_default_workspace_dir() -> str:
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "workspace"))
+
+
+def _discover_capsule_docs(env_dir: str, *, max_depth: int = 4) -> tuple[list[str], list[dict[str, str]]]:
+    """
+    Find README-like docs inside a staged capsule environment.
+
+    Returns:
+        (included_candidates, excluded_docs)
+    """
+    included: list[str] = []
+    excluded: list[dict[str, str]] = []
+
+    if not os.path.isdir(env_dir):
+        return [], []
+
+    skip_dirs = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+    for root, dirs, files in os.walk(env_dir):
+        rel_root = os.path.relpath(root, env_dir)
+        depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
+        if depth >= max_depth:
+            dirs[:] = []
+        else:
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+
+        for fname in files:
+            fname_lower = fname.lower()
+            is_reproducing = fname_lower == "reproducing.md"
+            is_readme = bool(_README_FILENAME_RE.match(fname))
+            if not (is_reproducing or is_readme):
+                continue
+
+            rel_path = fname if rel_root == "." else os.path.normpath(os.path.join(rel_root, fname))
+            ext = os.path.splitext(fname)[1].lower()
+
+            if ext in _EXCLUDE_DOC_EXTENSIONS:
+                excluded.append({"path": rel_path, "reason": f"excluded_extension:{ext}"})
+                continue
+            if ext not in _INCLUDE_DOC_EXTENSIONS:
+                excluded.append({"path": rel_path, "reason": f"unsupported_extension:{ext}"})
+                continue
+
+            included.append(rel_path)
+
+    def _sort_key(path: str) -> tuple[int, int, str]:
+        norm = path.replace("\\", "/")
+        lower = norm.lower()
+        name = os.path.basename(lower)
+        depth = 0 if "/" not in lower else lower.count("/")
+
+        if name == "reproducing.md":
+            group = 0
+        elif "/" not in lower and name.startswith("readme"):
+            group = 1
+        elif lower.startswith("code/") and name.startswith("readme"):
+            group = 2
+        elif lower.startswith("environment/") and name.startswith("readme"):
+            group = 3
+        else:
+            group = 4
+
+        return group, depth, lower
+
+    return sorted(set(included), key=_sort_key), excluded
+
+
+def _build_capsule_context(
+    *,
+    workspace_dir: Optional[str] = None,
+    max_total_bytes: int = 12_000,
+    per_file_bytes: int = 6_000,
+    max_files: int = 4,
+) -> tuple[str, dict[str, Any]]:
+    workspace_dir = (workspace_dir or "").strip()
+    if not workspace_dir:
+        workspace_dir = (os.environ.get("COREBENCH_WORKSPACE_DIR") or "").strip() or _capsule_default_workspace_dir()
+
+    env_dir = os.path.join(workspace_dir, "environment")
+
+    docs, excluded = _discover_capsule_docs(env_dir)
+    if not docs and not excluded:
+        return "", {"workspace_dir": workspace_dir, "env_dir": env_dir, "docs": [], "excluded": excluded, "included": []}
+
+    remaining = max_total_bytes
+    included: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    chunks: list[str] = []
+
+    for rel_path in docs:
+        if len(included) >= max_files or remaining <= 0:
+            skipped.append(rel_path)
+            continue
+
+        abs_path = os.path.join(env_dir, rel_path)
+        if not os.path.isfile(abs_path):
+            continue
+
+        read_bytes = min(per_file_bytes, remaining)
+        try:
+            text, truncated, consumed = _read_text_file_head_bytes(abs_path, read_bytes)
+        except OSError:
+            continue
+
+        suffix = "\n...[truncated]..." if truncated else ""
+        chunks.append(f"### {rel_path}\n```\n{text}{suffix}\n```")
+        included.append(
+            {
+                "path": rel_path,
+                "bytes_consumed": consumed,
+                "truncated": truncated,
+                "included_bytes": read_bytes,
+            }
+        )
+        remaining -= consumed
+
+    overview_lines: list[str] = []
+    overview_lines.append("## Capsule Docs (available to agent)")
+    if docs:
+        overview_lines.append("Docs discovered (README*/REPRODUCING.md):")
+        for rel_path in docs[:30]:
+            overview_lines.append(f"- {rel_path}")
+        if len(docs) > 30:
+            overview_lines.append(f"- ... ({len(docs) - 30} more)")
+    if excluded:
+        overview_lines.append("Excluded docs:")
+        for item in excluded[:20]:
+            overview_lines.append(f"- {item.get('path')}: {item.get('reason')}")
+        if len(excluded) > 20:
+            overview_lines.append(f"- ... ({len(excluded) - 20} more)")
+    if skipped:
+        overview_lines.append("Not excerpted (budget):")
+        for rel_path in skipped[:20]:
+            overview_lines.append(f"- {rel_path}")
+        if len(skipped) > 20:
+            overview_lines.append(f"- ... ({len(skipped) - 20} more)")
+
+    overview = "\n".join(overview_lines) + "\n"
+    body = "\n\n".join(chunks)
+    context = overview if not body else overview + "\n" + body + "\n"
+
+    debug = {
+        "workspace_dir": workspace_dir,
+        "env_dir": env_dir,
+        "docs": docs,
+        "excluded": excluded,
+        "included": included,
+        "skipped": skipped,
+        "remaining_bytes": remaining,
+    }
+    return context, debug
+
+
+def _build_tool_interactions(
+    tool_calls: list[dict[str, Any]],
+    tool_results: list[dict[str, Any]],
+    *,
+    max_interactions: int = 24,
+    max_result_chars: int = 1200,
+    max_args_chars: int = 700,
+) -> str:
+    if not tool_calls:
+        return "(No tool calls recorded)"
+
+    results_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for event in tool_results:
+        key = (event.get("turn"), event.get("tool"))
+        if key not in results_by_key:
+            results_by_key[key] = event
+
+    pairs: list[tuple[dict[str, Any], Optional[dict[str, Any]]]] = []
+    for call in tool_calls:
+        key = (call.get("turn"), call.get("tool"))
+        pairs.append((call, results_by_key.get(key)))
+
+    def _format_pair(call: dict[str, Any], result: Optional[dict[str, Any]]) -> str:
+        turn = call.get("turn", "?")
+        tool = call.get("tool", call.get("name", "unknown"))
+        arguments = call.get("arguments", {})
+        args_json = json.dumps(arguments, ensure_ascii=False, default=str, indent=2)
+        if len(args_json) > max_args_chars:
+            args_json = args_json[:max_args_chars] + "\n... (truncated)"
+
+        lines = [f"[Turn {turn}] {tool}", f"Arguments:\n{args_json}"]
+
+        if result:
+            exit_code = result.get("exit_code", None)
+            timed_out = result.get("timed_out", False)
+            hint = result.get("hint")
+            summary = str(result.get("summary", "") or "")
+            if len(summary) > max_result_chars:
+                summary = summary[:max_result_chars] + "\n... (truncated)"
+
+            lines.append(f"Result: exit_code={exit_code}, timed_out={timed_out}")
+            if summary.strip():
+                lines.append(f"Summary:\n{summary}")
+            if hint:
+                lines.append(f"Evaluator hint shown to agent:\n{hint}")
+        else:
+            lines.append("Result: (missing tool_result event)")
+
+        return "\n".join(lines)
+
+    if len(pairs) <= max_interactions:
+        formatted = [_format_pair(call, result) for call, result in pairs]
+        return "\n\n".join(formatted)
+
+    head = 8
+    tail = max_interactions - head
+    formatted_head = [_format_pair(call, result) for call, result in pairs[:head]]
+    formatted_tail = [_format_pair(call, result) for call, result in pairs[-tail:]]
+    skipped = max(0, len(pairs) - max_interactions)
+    return "\n\n".join(formatted_head + [f"... ({skipped} tool interactions omitted) ..."] + formatted_tail)
 
 
 async def evaluate_task_adherence(
     domain: str,
     task_prompt: str,
     steps_used: int,
-    tool_calls: list[dict],
+    tool_calls_count: int,
     protocol_errors: int,
     submitted: dict[str, Any],
     accuracy_result: AccuracyMetrics,
     action_trace: list[dict],
+    tool_calls: Optional[list[dict[str, Any]]] = None,
+    tool_results: Optional[list[dict[str, Any]]] = None,
+    workspace_dir: Optional[str] = None,
+    trace_event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     judge_model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     command_timeouts: int = 0,
 ) -> TaskAdherenceMetrics:
-    """
-    Use LLM-as-judge to evaluate task execution quality.
-    
-    Args:
-        domain: Task difficulty domain
-        task_prompt: Original task instructions
-        steps_used: Number of interaction steps
-        tool_calls: List of tool calls made
-        protocol_errors: Number of protocol/format errors
-        submitted: Agent's submitted answers
-        accuracy_result: Accuracy metrics
-        action_trace: List of action events from trace
-        judge_model: LLM model to use as judge
-        command_timeouts: Number of commands that hit timeout limits
-        
-    Returns:
-        TaskAdherenceMetrics from LLM evaluation
-    """
+    """Use LLM-as-judge to evaluate task execution quality."""
     action_summary = _build_action_summary(action_trace)
     
     answer_summary = (
@@ -1051,15 +1064,18 @@ async def evaluate_task_adherence(
     else:
         timeout_note = ""
     
+    capsule_context, capsule_debug = _build_capsule_context(workspace_dir=workspace_dir)
+    tool_interactions = _build_tool_interactions(tool_calls or [], tool_results or [])
     prompt = TASK_ADHERENCE_PROMPT.format(
         domain=domain,
         task_prompt=task_prompt,
+        capsule_context=capsule_context,
         steps_used=steps_used,
-        tool_calls_count=len(tool_calls),
+        tool_calls_count=tool_calls_count,
         protocol_errors=protocol_errors,
         command_timeouts=command_timeouts,
         timeout_note=timeout_note,
-        action_summary=action_summary,
+        tool_interactions=tool_interactions,
         has_answer="Yes" if submitted else "No",
         answer_summary=answer_summary,
     )
@@ -1075,6 +1091,26 @@ async def evaluate_task_adherence(
     
     if not api_key:
         logger.error("No API key set for LLM-as-judge evaluation (checked COREBENCH_TEXT_API_KEY and NEBIUS_API_KEY)")
+        model_name = judge_model
+        if not model_name.startswith("openai/"):
+            model_name = f"openai/{judge_model}"
+        if trace_event_callback is not None:
+            try:
+                trace_event_callback(
+                    {
+                        "type": "llm_judge_skipped",
+                        "judge": "task_adherence",
+                        "flow": "green -> judge",
+                        "domain": domain,
+                        "model": model_name,
+                        "reason": "missing_api_key",
+                        "api_base": api_base,
+                        "has_api_key": False,
+                        "prompt": prompt,
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write task adherence judge skipped trace: {e}")
         return TaskAdherenceMetrics(
             score=0.0,
             followed_instructions=False,
@@ -1090,9 +1126,34 @@ async def evaluate_task_adherence(
     model_name = judge_model
     if not model_name.startswith("openai/"):
         model_name = f"openai/{judge_model}"
-    
     logger.debug(f"Task adherence judge using model={model_name}, api_base={api_base}")
-    
+
+    if trace_event_callback is not None:
+        try:
+            trace_event_callback(
+                {
+                    "type": "llm_judge_input",
+                    "judge": "task_adherence",
+                    "flow": "green -> judge",
+                    "domain": domain,
+                    "model": model_name,
+                    "task_prompt": task_prompt,
+                    "steps_used": steps_used,
+                    "tool_calls_count": tool_calls_count,
+                    "protocol_errors": protocol_errors,
+                    "command_timeouts": command_timeouts,
+                    "timeout_note": timeout_note,
+                    "has_answer": bool(submitted),
+                    "answer_summary": answer_summary,
+                    "action_summary": action_summary,
+                    "capsule_context_debug": capsule_debug,
+                    "tool_interactions": tool_interactions,
+                    "prompt": prompt,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to write task adherence judge input trace: {e}")
+
     try:
         response = await litellm.acompletion(
             model=model_name,
@@ -1100,13 +1161,29 @@ async def evaluate_task_adherence(
             api_key=api_key,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            # Note: temperature omitted as some models don't support it
         )
         
-        result = json.loads(response.choices[0].message.content)
+        raw_content = response.choices[0].message.content
+        result = json.loads(raw_content)
+
+        if trace_event_callback is not None:
+            try:
+                trace_event_callback(
+                    {
+                        "type": "llm_judge_output",
+                        "judge": "task_adherence",
+                        "flow": "judge -> green",
+                        "domain": domain,
+                        "model": model_name,
+                        "raw": raw_content,
+                        "parsed": result,
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to write task adherence judge output trace: {e}")
         
         return TaskAdherenceMetrics(
-            score=float(result.get("score", 0.0)),
+            score=float(result.get("score", 0.0)), 
             followed_instructions=bool(result.get("followed_instructions", False)),
             navigation_quality=str(result.get("navigation_quality", "poor")),
             reasoning=str(result.get("reasoning", "")),
@@ -1116,6 +1193,20 @@ async def evaluate_task_adherence(
         
     except Exception as e:
         logger.error(f"Task adherence evaluation failed: {e}")
+        if trace_event_callback is not None:
+            try:
+                trace_event_callback(
+                    {
+                        "type": "llm_judge_error",
+                        "judge": "task_adherence",
+                        "flow": "judge -> green",
+                        "domain": domain,
+                        "model": model_name,
+                        "error": str(e),
+                    }
+                )
+            except Exception as trace_e:
+                logger.warning(f"Failed to write task adherence judge error trace: {trace_e}")
         return TaskAdherenceMetrics(
             score=0.0,
             followed_instructions=False,
@@ -1130,8 +1221,7 @@ async def evaluate_task_adherence(
 
 def _build_action_summary(action_trace: list[dict], max_actions: int = 30) -> str:
     """
-    Build a summary of agent actions. 
-    If trace > max_actions, preserves the first 10 (setup) and last (max-10) actions (result).
+    Build a summary of purple agent actions and the MCP server results. 
     """
     
     # Helper to format a single event string
@@ -1188,10 +1278,10 @@ def _build_action_summary(action_trace: list[dict], max_actions: int = 30) -> st
 def compute_efficiency(
     steps_used: int,
     max_steps: int,
-    tool_calls: list[dict],
+    tool_calls_count: int,
     time_seconds: float,
     protocol_errors: int,
-    tool_results: Optional[list[dict]] = None,
+    command_timeouts: int = 0,
 ) -> EfficiencyMetrics:
     """
     Compute efficiency metrics for the task execution.
@@ -1199,26 +1289,14 @@ def compute_efficiency(
     Args:
         steps_used: Number of interaction steps taken
         max_steps: Maximum allowed steps
-        tool_calls: List of tool calls made
+        tool_calls_count: Number of tool calls made (excludes FINAL_ANSWER)
         time_seconds: Total time taken in seconds
         protocol_errors: Number of protocol/format errors
-        tool_results: Optional list of tool result dicts to count timeouts
-        
-    Returns:
-        EfficiencyMetrics
     """
-    # Count commands that timed out
-    command_timeouts = 0
-    if tool_results:
-        for result in tool_results:
-            result_text = str(result.get("result", "")).lower()
-            if "timed out" in result_text or "timeout" in result_text:
-                command_timeouts += 1
-    
     return EfficiencyMetrics(
         steps_used=steps_used,
         max_steps=max_steps,
-        tool_calls=len(tool_calls),
+        tool_calls=tool_calls_count,
         time_seconds=time_seconds,
         protocol_errors=protocol_errors,
         command_timeouts=command_timeouts,
@@ -1248,9 +1326,6 @@ class AggregateMetrics:
         
         mean_restoration_rate: Average file restoration rate (medium/hard only)
         
-        mean_faithfulness: Average LLM-judge faithfulness score
-        num_suspected_guessing: Count of tasks flagged for potential guessing
-        
         mean_adherence: Average LLM-judge task adherence score
         
         mean_steps: Average interaction steps per task
@@ -1263,27 +1338,18 @@ class AggregateMetrics:
     num_successful: int
     pass_rate: float
     
-    # Accuracy
     mean_accuracy: float
     mean_written_accuracy: float
     mean_vision_accuracy: float
     
-    # Reproducibility (if applicable)
     mean_restoration_rate: Optional[float]
     
-    # Faithfulness
-    mean_faithfulness: float
-    num_suspected_guessing: int
-    
-    # Task adherence
     mean_adherence: float
     
-    # Efficiency
     mean_steps: float
     mean_tool_calls: float
     mean_time: float
     
-    # Per-task results
     task_results: dict[str, dict]
 
 
@@ -1309,8 +1375,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
             mean_written_accuracy=0.0,
             mean_vision_accuracy=0.0,
             mean_restoration_rate=None,
-            mean_faithfulness=0.0,
-            num_suspected_guessing=0,
             mean_adherence=0.0,
             mean_steps=0.0,
             mean_tool_calls=0.0,
@@ -1326,17 +1390,13 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     mean_written = np.mean([e.accuracy.written_accuracy for e in evaluations])
     mean_vision = np.mean([e.accuracy.vision_accuracy for e in evaluations])
     
-    # Reproducibility (only count tasks with targets)
-    repro_rates = [
-        e.reproducibility.restoration_rate 
-        for e in evaluations 
-        if e.reproducibility and e.reproducibility.targets
-    ]
-    mean_restoration = np.mean(repro_rates) if repro_rates else None
-    
-    # Faithfulness
-    mean_faithfulness = np.mean([e.faithfulness.score for e in evaluations])
-    num_guessing = sum(1 for e in evaluations if e.faithfulness.suspected_guessing)
+    # Reproducibility - count successes
+    repro_evals = [e for e in evaluations if e.reproducibility is not None]
+    if repro_evals:
+        num_reproduced = sum(1 for e in repro_evals if e.reproducibility.success)
+        mean_restoration = num_reproduced / len(repro_evals)
+    else:
+        mean_restoration = None
     
     # Adherence
     mean_adherence = np.mean([e.task_adherence.score for e in evaluations])
@@ -1351,7 +1411,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
         e.task_id: {
             "success": bool(e.success),
             "accuracy": float(e.accuracy.accuracy),
-            "faithfulness": float(e.faithfulness.score),
             "adherence": float(e.task_adherence.score),
         }
         for e in evaluations
@@ -1365,8 +1424,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
         mean_written_accuracy=float(mean_written),
         mean_vision_accuracy=float(mean_vision),
         mean_restoration_rate=float(mean_restoration) if mean_restoration is not None else None,
-        mean_faithfulness=float(mean_faithfulness),
-        num_suspected_guessing=num_guessing,
         mean_adherence=float(mean_adherence),
         mean_steps=float(mean_steps),
         mean_tool_calls=float(mean_tools),

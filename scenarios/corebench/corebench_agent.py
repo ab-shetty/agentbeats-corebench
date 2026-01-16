@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
 # - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
 # - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
-DEFAULT_MODEL = "openai/gpt-5-mini"
+DEFAULT_MODEL = "nebius/openai/gpt-oss-120b"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
@@ -413,10 +413,36 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         response = completion(**self._completion_kwargs(messages))
                         self._track_tokens(context.context_id, response)
 
-                        assistant_content = response.choices[0].message.content
+                        follow_up_message = response.choices[0].message
+                        assistant_content = follow_up_message.content
+
+                        # Handle case where follow-up also returns reasoning but no content
                         if assistant_content is None:
-                            logger.error("Follow-up request also returned no content!")
-                            raise ValueError("Both initial and follow-up responses had no content")
+                            follow_up_reasoning = getattr(follow_up_message, 'reasoning_content', None)
+                            if follow_up_reasoning:
+                                logger.warning("Follow-up also returned reasoning without content, reprompting")
+                                logger.debug(f"Follow-up reasoning: {follow_up_reasoning}")
+                                # Add the reasoning to history and prompt again
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": f"[Follow-up reasoning: {follow_up_reasoning}]"
+                                })
+                                messages.append({
+                                    "role": "user",
+                                    "content": (
+                                        "Please stop reasoning and provide the actual JSON tool call now:\n\n"
+                                        "<json>\n"
+                                        "{\n"
+                                        '  "name": "tool_name",\n'
+                                        '  "arguments": {...}\n'
+                                        "}\n"
+                                        "</json>"
+                                    )
+                                })
+                                continue
+                            else:
+                                logger.error("Follow-up request also returned no content and no reasoning!")
+                                raise ValueError("Both initial and follow-up responses had no content")
                     else:
                         logger.error("Assistant content is None and no reasoning_content!")
                         logger.error(f"Message: {message}")
