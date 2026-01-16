@@ -11,8 +11,8 @@ cmd = "python scenarios/corebench/corebench_agent.py --host 127.0.0.1 --port 901
 
 [config]
 domain = "corebench_hard"  # Options: corebench_easy, corebench_medium, corebench_hard
-num_tasks = 2                # Number of tasks to evaluate
-# task_ids = ["capsule-3449234"]  # Optional: specify exact capsule IDs0
+num_tasks = 7               # Number of tasks to evaluate
+task_ids = ["capsule-8807709", "capsule-6049678", "capsule-9641396", "capsule-6003668", "capsule-8234136"] # "capsule-8536428", 
 use_mcp = true
 mcp_server_command = ["uv", "run", "mcp", "run", "scenarios/corebench/mcp_server.py"]
 keep_traces = true           # Keep trace files in logs/traces/ for debugging
