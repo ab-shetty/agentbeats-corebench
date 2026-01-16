@@ -1,4 +1,4 @@
-# AgentBeats CoreBench (WIP)
+# AgentBeats CoreBench
 
 **Testing AI Agents' Ability to Reproduce Published Scientific Research**
 
