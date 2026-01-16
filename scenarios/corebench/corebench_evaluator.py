@@ -700,11 +700,10 @@ class CoreBenchEvaluator(GreenAgent):
     
     def _apply_difficulty_filters(self, domain: str) -> tuple[list[str], list[str]]:
         """
+        Remove files based on difficulty level.
+    
         Returns:
-            (all_removed_paths, reproducibility_targets)
-            
-            all_removed_paths: Everything we deleted (for debugging)
-            reproducibility_targets: Only paths we expect agent to recreate (for scoring)
+            True if results/ was removed
         """
         removed_results = False        
         env_dir = os.path.join(self._workspace_dir, "environment")
@@ -1605,46 +1604,21 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 if answer is None:
                     logger.warning(f"FINAL_ANSWER missing content; proceeding with empty answer")
                     answer = {}
-
+                
                 logger.info(f"FINAL ANSWER type: {type(answer)}")
                 logger.info(f"FINAL ANSWER: {answer}")
+                
                 if answer_metadata:
                     logger.info(f"FINAL ANSWER metadata: {answer_metadata}")
+                
                 if trace:
-                    trace.add(
-                        {
-                            "type": "final_answer",
-                            "flow": "purple -> green",
-                            "turn": steps_used,
-                            "content": answer,
-                            "metadata": answer_metadata,
-                        }
-                    )
-                if reproducibility_targets:
-                    # Debug: what did the agent create?
-                    try:
-                        final_files, final_dirs = self._snapshot_tree_paths(
-                            env_dir, skip_dir_names=workspace_snapshot_skip_dirs
-                        )
-                        created_files = sorted(final_files - baseline_files)
-                        created_dirs = sorted(final_dirs - baseline_dirs)
-                        
-                        # Filter out venv stuff
-                        created_files = [f for f in created_files if 'venv' not in f]
-                        created_dirs = [d for d in created_dirs if 'venv' not in d]
-                        
-                        logger.info(f"📁 Agent created: {len(created_files)} files, {len(created_dirs)} dirs")
-                        for f in created_files[:20]:
-                            logger.info(f"   + {f}")
-                        
-                        if trace:
-                            trace.add({
-                                "type": "workspace_diff",
-                                "created_files": created_files[:200],
-                                "created_dirs": created_dirs[:200],
-                            })
-                    except Exception as e:
-                        logger.warning(f"Failed to snapshot: {e}")
+                    trace.add({
+                        "type": "final_answer",
+                        "flow": "purple -> green",
+                        "turn": steps_used,
+                        "content": answer,
+                        "metadata": answer_metadata,
+                    })
                 break
 
             # Agent requested a tool that isn't available (or MCP is disabled).
@@ -1741,15 +1715,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         
         #  REPRODUCIBILITY
         reproducibility_metrics: Optional[ReproducibilityMetrics] = None
-
         if check_reproducibility:
             logger.info("2️⃣  Computing reproducibility...")
             reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
             
             if reproducibility_metrics.success:
-                logger.info(f"   ✅ Reproduced: {reproducibility_metrics.reason}")
+                logger.info(f"   ✅ {reproducibility_metrics.reason}")
             else:
-                logger.info(f"   ❌ Not reproduced: {reproducibility_metrics.reason}")
+                logger.info(f"   ❌ {reproducibility_metrics.reason}")
 
         # Count command timeouts for task adherence context
         command_timeouts = sum(
