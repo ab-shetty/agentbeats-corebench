@@ -657,7 +657,7 @@ def evaluate_reproducibility(
     
     For medium/hard difficulties, certain files (results/, REPRODUCING.md, run scripts)
     are removed before the task starts. This metric measures what percentage the
-    agent successfully recreated with meaningful content.
+    agent successfully recreated with meaningful content (not necessarily in the same folder).
     
     Restoration Criteria:
     - Files must exist AND have size >= MIN_FILE_SIZE_BYTES (10 bytes)
@@ -674,12 +674,20 @@ def evaluate_reproducibility(
     from pathlib import Path
     import stat
     
-    targets = sorted(set(removed_paths))
+    targets = sorted({Path(p).name for p in removed_paths})
     workspace = Path(workspace_dir)
     
     restored = []
     missing = []
     details = []
+
+    name_index: dict[str, list[Path]] = {}
+    for root, dirs, files in os.walk(workspace):
+        root_path = Path(root)
+        for entry in dirs:
+            name_index.setdefault(entry, []).append(root_path / entry)
+        for entry in files:
+            name_index.setdefault(entry, []).append(root_path / entry)
 
     if logger.isEnabledFor(logging.DEBUG):
         max_entries = 400
@@ -740,65 +748,95 @@ def evaluate_reproducibility(
                 "\n".join(lines),
             )
     
-    for rel_path in targets:
-        abs_path = workspace / rel_path
-        exists = abs_path.exists()
-        
+    for target_name in targets:
+        matches = name_index.get(target_name, [])
+        exists = bool(matches)
+
         meta = {
-            "path": rel_path,
+            "path": target_name,
             "exists": exists,
             "kind": "missing",
             "valid": False,  # True only if restoration meets quality criteria
             "issues": [],    # List of quality issues found
+            "matches": [],
         }
-        
+
         if exists:
-            if abs_path.is_file():
-                meta["kind"] = "file"
-                file_stat = abs_path.stat()
-                meta["size_bytes"] = file_stat.st_size
-                
-                # Check file size - empty files don't count
-                if file_stat.st_size >= MIN_FILE_SIZE_BYTES:
-                    meta["valid"] = True
-                else:
-                    meta["issues"].append(f"file too small ({file_stat.st_size} bytes < {MIN_FILE_SIZE_BYTES})")
-                
-                # Check executable permission for scripts (informational)
-                suffix = abs_path.suffix.lower()
-                if suffix in EXECUTABLE_EXTENSIONS:
-                    is_executable = bool(file_stat.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
-                    meta["is_executable"] = is_executable
-                    if not is_executable:
-                        meta["issues"].append("script not executable (chmod +x recommended)")
-                        # Note: we still count it as valid if size is OK
-                        
-            elif abs_path.is_dir():
-                meta["kind"] = "dir"
-                try:
-                    num_entries = sum(1 for _ in abs_path.iterdir())
-                    meta["num_entries"] = num_entries
-                    
-                    # Empty directories don't count as restored
-                    if num_entries > 0:
-                        meta["valid"] = True
+            any_valid = False
+            kinds = set()
+            for match_path in matches:
+                match_meta = {
+                    "path": os.path.relpath(match_path, os.fspath(workspace)),
+                    "kind": "other",
+                    "valid": False,
+                    "issues": [],
+                }
+
+                if match_path.is_file():
+                    kinds.add("file")
+                    match_meta["kind"] = "file"
+                    file_stat = match_path.stat()
+                    match_meta["size_bytes"] = file_stat.st_size
+
+                    if file_stat.st_size >= MIN_FILE_SIZE_BYTES:
+                        match_meta["valid"] = True
                     else:
-                        meta["issues"].append("directory is empty")
-                except OSError as e:
-                    meta["num_entries"] = -1
-                    meta["issues"].append(f"cannot read directory: {e}")
-            else:
-                meta["kind"] = "other"
-                meta["valid"] = True  # Symlinks, etc. - give benefit of doubt
-            
-            # Only count as restored if it passes quality checks
+                        match_meta["issues"].append(
+                            f"file too small ({file_stat.st_size} bytes < {MIN_FILE_SIZE_BYTES})"
+                        )
+
+                    suffix = match_path.suffix.lower()
+                    if suffix in EXECUTABLE_EXTENSIONS:
+                        is_executable = bool(
+                            file_stat.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                        )
+                        match_meta["is_executable"] = is_executable
+                        if not is_executable:
+                            match_meta["issues"].append(
+                                "script not executable (chmod +x recommended)"
+                            )
+
+                elif match_path.is_dir():
+                    kinds.add("dir")
+                    match_meta["kind"] = "dir"
+                    try:
+                        num_entries = sum(1 for _ in match_path.iterdir())
+                        match_meta["num_entries"] = num_entries
+                        if num_entries > 0:
+                            match_meta["valid"] = True
+                        else:
+                            match_meta["issues"].append("directory is empty")
+                    except OSError as e:
+                        match_meta["num_entries"] = -1
+                        match_meta["issues"].append(f"cannot read directory: {e}")
+                else:
+                    kinds.add("other")
+                    match_meta["kind"] = "other"
+                    match_meta["valid"] = True
+
+                if match_meta["valid"]:
+                    any_valid = True
+                meta["matches"].append(match_meta)
+
+            if "file" in kinds and "dir" in kinds:
+                meta["kind"] = "mixed"
+            elif kinds:
+                meta["kind"] = next(iter(kinds))
+
+            meta["valid"] = any_valid
+            if not any_valid:
+                for match in meta["matches"]:
+                    meta["issues"].extend(match.get("issues", []))
+
             if meta["valid"]:
-                restored.append(rel_path)
+                restored.append(target_name)
             else:
-                missing.append(rel_path)
-                logger.warning(f"Restoration quality issue for '{rel_path}': {meta['issues']}")
+                missing.append(target_name)
+                logger.warning(
+                    f"Restoration quality issue for '{target_name}': {meta['issues']}"
+                )
         else:
-            missing.append(rel_path)
+            missing.append(target_name)
         
         details.append(meta)
     
