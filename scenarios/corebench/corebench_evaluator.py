@@ -736,43 +736,6 @@ class CoreBenchEvaluator(GreenAgent):
                         shutil.rmtree(abs_path)
         return removed_results
     
-    @staticmethod
-    def _snapshot_tree_paths(
-        root_dir: str,
-        *,
-        skip_dir_names: Optional[set[str]] = None,
-    ) -> tuple[set[str], set[str]]:
-        """
-        Snapshot file + directory paths under a root directory.
-
-        Returns:
-            (files, dirs) as sets of paths relative to root_dir.
-        """
-        files: set[str] = set()
-        dirs: set[str] = set()
-
-        if not root_dir or not os.path.exists(root_dir):
-            return files, dirs
-
-        skip = skip_dir_names or set()
-
-        for dirpath, dirnames, filenames in os.walk(root_dir, topdown=True):
-            dirnames[:] = [d for d in dirnames if d not in skip]
-
-            rel_dir = os.path.relpath(dirpath, root_dir)
-            if rel_dir != ".":
-                if os.sep != "/":
-                    rel_dir = rel_dir.replace(os.sep, "/")
-                dirs.add(rel_dir)
-
-            for filename in filenames:
-                rel_path = os.path.relpath(os.path.join(dirpath, filename), root_dir)
-                if os.sep != "/":
-                    rel_path = rel_path.replace(os.sep, "/")
-                files.add(rel_path)
-
-        return files, dirs
-    
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         """
         Validate the incoming `EvalRequest` before starting evaluation.
@@ -805,7 +768,7 @@ class CoreBenchEvaluator(GreenAgent):
             self._mcp_tools = self._mcp_client.tools
             
             tool_names = [t.get('name') if isinstance(t, dict) else getattr(t, 'name', 'unknown') for t in self._mcp_tools]
-            # logger.info(f"MCP tools available: {tool_names}")
+            logger.info(f"MCP tools available: {tool_names}")
             return self._mcp_tools
             
         except Exception as e:
@@ -1019,8 +982,8 @@ class CoreBenchEvaluator(GreenAgent):
         logger.info(f"Num tasks: {num_tasks}")
         if task_index is not None:
             logger.info(f"Task index: {task_index}")
-        #logger.info(f"Max steps: {max_steps}")
-        #logger.info(f"Keep traces: {keep_traces}")
+        logger.info(f"Max steps: {max_steps}")
+        logger.info(f"Keep traces: {keep_traces}")
         logger.info(f"Use cache: {use_cache}")
         use_cache = req.config.get("use_cache", False)  # Whether to cache capsules for reuse
 
@@ -1042,7 +1005,7 @@ class CoreBenchEvaluator(GreenAgent):
 
         # Get the purple agent URL
         agent_url = str(req.participants["agent"])
-        # logger.info(f"🔗 Purple Agent: {agent_url}")
+        logger.info(f"🔗 Purple Agent: {agent_url}")
 
         # Initialize MCP client if enabled
         if use_mcp:
