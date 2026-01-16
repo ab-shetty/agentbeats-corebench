@@ -71,3 +71,8 @@ Note: schema lists are not mutually exclusive (capsules with multiple `readme*` 
   - `code/README.md`
   - `environment/README.md`
   - `REPRODUCING.md`: present (`REPRODUCING.md`)
+
+
+
+## Reproducing pattern
+

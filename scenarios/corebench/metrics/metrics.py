@@ -163,21 +163,18 @@ class AccuracyMetrics:
 
 @dataclass
 class ReproducibilityMetrics:
-    """Metrics for file/environment restoration."""
-    targets: list[str]  # Files/folders that were removed by difficulty filter
-    restored: list[str]  # Successfully restored paths
-    missing: list[str]   # Paths that were not restored
-    restoration_rate: float
-    # weighted_score: float  # MAYBE IMPLEMENT LATER weight by importance
-    details: list[dict[str, Any]]  # Per-path metadata
+    """Did the agent successfully produce outputs?"""
+    success: bool                    # Primary metric: did they produce results?
+    results_dir_exists: bool
+    num_output_files: int
+    total_output_bytes: int
+    output_files: list[str]
+    reason: str
     
     @property
-    def targets_count(self) -> int:
-        return len(self.targets)
-    
-    @property
-    def restored_count(self) -> int:
-        return len(self.restored)
+    def restoration_rate(self) -> float:
+        """For backwards compatibility with aggregate."""
+        return 1.0 if self.success else 0.0
 
 
 
@@ -650,168 +647,65 @@ EXECUTABLE_EXTENSIONS = {".sh", ".py", ".pl", ".rb", ".bash"}
 
 def evaluate_reproducibility(
     workspace_dir: str,
-    removed_paths: list[str],
+    results_dir_rel: str = "environment/results",
 ) -> ReproducibilityMetrics:
-    """
-    Evaluate how well the agent restored files removed by difficulty filters.
-    
-    For medium/hard difficulties, certain files (results/, REPRODUCING.md, run scripts)
-    are removed before the task starts. This metric measures what percentage the
-    agent successfully recreated with meaningful content.
-    
-    Restoration Criteria:
-    - Files must exist AND have size >= MIN_FILE_SIZE_BYTES (10 bytes)
-    - Directories must exist AND contain at least one entry
-    - Scripts (.sh, .py, etc.) should ideally be executable (logged but not required)
-    
-    Args:
-        workspace_dir: Path to the workspace directory
-        removed_paths: List of relative paths that were removed
-        
-    Returns:
-        ReproducibilityMetrics with restoration details including quality checks
-    """
+    """Check if agent produced outputs in results/."""
     from pathlib import Path
-    import stat
     
-    targets = sorted(set(removed_paths))
-    workspace = Path(workspace_dir)
+    MIN_FILE_SIZE = 10
+    results_path = Path(workspace_dir) / results_dir_rel
     
-    restored = []
-    missing = []
-    details = []
-
-    if logger.isEnabledFor(logging.DEBUG):
-        max_entries = 400
-        max_depth = 3
-        stat_budget = 80
-        skip_names = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-
-        entries_logged = 0
-        stats_used = 0
-        lines: list[str] = []
-        stack: list[tuple[str, int]] = [(os.fspath(workspace), 0)]
-
-        while stack and entries_logged < max_entries:
-            dir_path, depth = stack.pop()
+    if not results_path.exists():
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=False,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results/ not created",
+        )
+    
+    if not results_path.is_dir():
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=False,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results exists but not a directory",
+        )
+    
+    output_files = []
+    total_bytes = 0
+    
+    for f in results_path.rglob("*"):
+        if f.is_file():
             try:
-                with os.scandir(dir_path) as it:
-                    for entry in it:
-                        if entries_logged >= max_entries:
-                            break
-                        if entry.name in skip_names:
-                            continue
-
-                        rel = os.path.relpath(entry.path, os.fspath(workspace))
-
-                        if entry.is_dir(follow_symlinks=False):
-                            lines.append(f"d {rel}/")
-                            entries_logged += 1
-                            if depth + 1 < max_depth:
-                                stack.append((entry.path, depth + 1))
-                            continue
-
-                        if entry.is_file(follow_symlinks=False):
-                            size_suffix = ""
-                            if stats_used < stat_budget:
-                                try:
-                                    size_suffix = f" ({entry.stat(follow_symlinks=False).st_size}B)"
-                                except OSError:
-                                    size_suffix = ""
-                                stats_used += 1
-                            lines.append(f"f {rel}{size_suffix}")
-                            entries_logged += 1
-                            continue
-
-                        lines.append(f"o {rel}")
-                        entries_logged += 1
-            except OSError as e:
-                rel_dir = os.path.relpath(dir_path, os.fspath(workspace))
-                lines.append(f"! {rel_dir}: {e}")
-                entries_logged += 1
-
-        if stack:
-            lines.append(f"... [truncated after {max_entries} entries] ...")
-        if lines:
-            logger.debug(
-                "Workspace contents under %s (depth<=%d):\n%s",
-                workspace,
-                max_depth,
-                "\n".join(lines),
-            )
+                size = f.stat().st_size
+                if size >= MIN_FILE_SIZE:
+                    output_files.append(str(f.relative_to(results_path)))
+                    total_bytes += size
+            except OSError:
+                continue
     
-    for rel_path in targets:
-        abs_path = workspace / rel_path
-        exists = abs_path.exists()
-        
-        meta = {
-            "path": rel_path,
-            "exists": exists,
-            "kind": "missing",
-            "valid": False,  # True only if restoration meets quality criteria
-            "issues": [],    # List of quality issues found
-        }
-        
-        if exists:
-            if abs_path.is_file():
-                meta["kind"] = "file"
-                file_stat = abs_path.stat()
-                meta["size_bytes"] = file_stat.st_size
-                
-                # Check file size - empty files don't count
-                if file_stat.st_size >= MIN_FILE_SIZE_BYTES:
-                    meta["valid"] = True
-                else:
-                    meta["issues"].append(f"file too small ({file_stat.st_size} bytes < {MIN_FILE_SIZE_BYTES})")
-                
-                # Check executable permission for scripts (informational)
-                suffix = abs_path.suffix.lower()
-                if suffix in EXECUTABLE_EXTENSIONS:
-                    is_executable = bool(file_stat.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
-                    meta["is_executable"] = is_executable
-                    if not is_executable:
-                        meta["issues"].append("script not executable (chmod +x recommended)")
-                        # Note: we still count it as valid if size is OK
-                        
-            elif abs_path.is_dir():
-                meta["kind"] = "dir"
-                try:
-                    num_entries = sum(1 for _ in abs_path.iterdir())
-                    meta["num_entries"] = num_entries
-                    
-                    # Empty directories don't count as restored
-                    if num_entries > 0:
-                        meta["valid"] = True
-                    else:
-                        meta["issues"].append("directory is empty")
-                except OSError as e:
-                    meta["num_entries"] = -1
-                    meta["issues"].append(f"cannot read directory: {e}")
-            else:
-                meta["kind"] = "other"
-                meta["valid"] = True  # Symlinks, etc. - give benefit of doubt
-            
-            # Only count as restored if it passes quality checks
-            if meta["valid"]:
-                restored.append(rel_path)
-            else:
-                missing.append(rel_path)
-                logger.warning(f"Restoration quality issue for '{rel_path}': {meta['issues']}")
-        else:
-            missing.append(rel_path)
-        
-        details.append(meta)
-    
-    rate = len(restored) / len(targets) if targets else 0.0
+    if not output_files:
+        return ReproducibilityMetrics(
+            success=False,
+            results_dir_exists=True,
+            num_output_files=0,
+            total_output_bytes=0,
+            output_files=[],
+            reason="results/ is empty or has only trivial files",
+        )
     
     return ReproducibilityMetrics(
-        targets=targets,
-        restored=restored,
-        missing=missing,
-        restoration_rate=rate,
-        details=details,
+        success=True,
+        results_dir_exists=True,
+        num_output_files=len(output_files),
+        total_output_bytes=total_bytes,
+        output_files=output_files[:50],
+        reason=f"produced {len(output_files)} files ({total_bytes:,} bytes)",
     )
-
 
 # =============================================================================
 # TASK ADHERENCE EVALUATION (LLM-as-Judge)
@@ -1496,13 +1390,13 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     mean_written = np.mean([e.accuracy.written_accuracy for e in evaluations])
     mean_vision = np.mean([e.accuracy.vision_accuracy for e in evaluations])
     
-    # Reproducibility (only count tasks with targets)
-    repro_rates = [
-        e.reproducibility.restoration_rate 
-        for e in evaluations 
-        if e.reproducibility and e.reproducibility.targets
-    ]
-    mean_restoration = np.mean(repro_rates) if repro_rates else None
+    # Reproducibility - count successes
+    repro_evals = [e for e in evaluations if e.reproducibility is not None]
+    if repro_evals:
+        num_reproduced = sum(1 for e in repro_evals if e.reproducibility.success)
+        mean_restoration = num_reproduced / len(repro_evals)
+    else:
+        mean_restoration = None
     
     # Adherence
     mean_adherence = np.mean([e.task_adherence.score for e in evaluations])

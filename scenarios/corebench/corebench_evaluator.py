@@ -697,30 +697,30 @@ class CoreBenchEvaluator(GreenAgent):
             shutil.rmtree(self._workspace_dir)
         os.makedirs(self._workspace_dir, exist_ok=True)
         logger.debug("Workspace reset complete")
-
-    def _apply_difficulty_filters(self, domain: str) -> list[str]:
-        """Apply difficulty filters to the staged capsule and return removed files/paths."""
-        logger.info(f"Applying difficulty filters for domain: {domain}")
-
-        removed_paths: list[str] = []
-
-        env_dir = os.path.join(self._workspace_dir, "environment") # capsule root folder
-        results_dir = os.path.join(env_dir, "results")  # capsule results folder
-
-        print(f"[DEBUG] Calculated path for env_dir:     {env_dir}")
-        print(f"[DEBUG] Calculated path for results_dir: {results_dir}")
-
-        def _rel_to_workspace(abs_path: str) -> str:
+    
+    def _apply_difficulty_filters(self, domain: str) -> tuple[list[str], list[str]]:
+        """
+        Returns:
+            (all_removed_paths, reproducibility_targets)
+            
+            all_removed_paths: Everything we deleted (for debugging)
+            reproducibility_targets: Only paths we expect agent to recreate (for scoring)
+        """
+        removed_results = False        
+        env_dir = os.path.join(self._workspace_dir, "environment")
+        results_dir = os.path.join(env_dir, "results")
+        
+        def _rel(abs_path: str) -> str:
             return os.path.relpath(abs_path, self._workspace_dir)
-
-        # MEDIUM MODE: ONLY GIVEN DOCKERFILE + README INSTRUCTIONS
+        
+        # MEDIUM/HARD: Remove results
         if domain in ("corebench_medium", "corebench_hard"):
             if os.path.isdir(results_dir):
-                logger.info(f"Removing results directory for {domain}")
+                logger.info(f"Removing results/ for {domain}")
                 shutil.rmtree(results_dir)
-                removed_paths.append(_rel_to_workspace(results_dir))
-
-        # HARDMODE ONLY GIVEN README INSTRUCTIONS 
+                removed_results = True
+        
+        # HARD: Remove additional files (but don't expect agent to recreate these)
         if domain == "corebench_hard":
             paths_to_remove = [
                 os.path.join(env_dir, "REPRODUCING.md"),
@@ -728,27 +728,15 @@ class CoreBenchEvaluator(GreenAgent):
                 os.path.join(env_dir, "code", "run.sh"),
                 os.path.join(env_dir, "code", "run"),
             ]
-
+            
             for abs_path in paths_to_remove:
-                rel_path = _rel_to_workspace(abs_path)
-                if os.path.exists(abs_path): # Check exists first to cover both file and dir
+                if os.path.exists(abs_path):
                     if os.path.isfile(abs_path):
-                        print(f"[DEBUG] REMOVING FILE: {abs_path}")
-                        logger.debug(f"Removing file: {abs_path}")
                         os.remove(abs_path)
-                        removed_paths.append(rel_path)
-                    elif os.path.isdir(abs_path):
-                        print(f"[DEBUG] REMOVING DIR:  {abs_path}")
-                        logger.debug(f"Removing directory: {abs_path}")
+                    else:
                         shutil.rmtree(abs_path)
-                        removed_paths.append(rel_path)
-                else:
-                    print(f"[DEBUG] SKIPPING: {rel_path} (Not found)")
-        
-        logger.debug(f"Final list of removed files/folders: {removed_paths}")
-        logger.debug(f"Difficulty filters applied: {removed_paths}")
-        return removed_paths
-
+        return removed_results
+    
     @staticmethod
     def _snapshot_tree_paths(
         root_dir: str,
@@ -1110,7 +1098,6 @@ class CoreBenchEvaluator(GreenAgent):
                     logger.info(f"\n{'─' * 80}")
                     logger.info(f"✅ Task {task_id} Complete:")
                     logger.info(f"   Accuracy: {task_evaluation.accuracy.accuracy:.1%} ({task_evaluation.accuracy.correct_answers}/{task_evaluation.accuracy.total_questions})")
-                    # logger.info(f"   Faithfulness: {task_evaluation.faithfulness.score:.2f}/5")
                     logger.info(f"   Task Adherence: {task_evaluation.task_adherence.score:.2f}/1.0")
                     logger.info(f"   Steps: {task_evaluation.efficiency.steps_used}/{max_steps}")
                     logger.info(f"{'─' * 80}\n")
@@ -1189,11 +1176,17 @@ class CoreBenchEvaluator(GreenAgent):
             logger.info(f"✅ Success Rate: {aggregate.num_successful}/{aggregate.num_tasks} ({aggregate.pass_rate:.1%})")
             logger.info(f"📊 Mean Accuracy: {aggregate.mean_accuracy:.1%}")
             logger.info(f"📋 Mean Task Adherence: {aggregate.mean_adherence:.2f}/1.0")
-            if aggregate.mean_restoration_rate is not None:
-                logger.info(f"♻️  Mean Reproducibility: {aggregate.mean_restoration_rate:.1%}")
-            logger.info(f"⚡ Avg Steps: {aggregate.mean_steps:.1f} | Avg Tools: {aggregate.mean_tool_calls:.1f}")
-            logger.info(f"⏱️  Total Time: {time_used:.1f}s")
-            logger.info(f"{'=' * 80}\n")
+
+            # Fix: use task_evaluations, not tasks
+            if track_restoration:
+                num_reproduced = sum(
+                    1 for t in task_evaluations 
+                    if t.reproducibility and t.reproducibility.success
+                )
+                reproduction_rate = num_reproduced / len(task_evaluations) if task_evaluations else 0
+                logger.info(f"🔬 Reproduction Rate: {num_reproduced}/{len(task_evaluations)} ({reproduction_rate:.1%})")
+
+            logger.info(f"⚡ Avg Steps: {aggregate.mean_steps:.1f}")
 
             # Build result data for leaderboard
             result_data = {
@@ -1392,7 +1385,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             os.rename(capsule_path, env_dir)
 
         # Apply difficulty filters (and remember what we removed for restoration metrics).
-        removed_by_difficulty_filters = self._apply_difficulty_filters(domain)
+        check_reproducibility = self._apply_difficulty_filters(domain)
 
         # Initialize MCP client after staging so PWD is workspace/environment
         if use_mcp:
@@ -1413,24 +1406,10 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
         # Snapshot capsule state (after difficulty filters) for reproducibility debugging.
         workspace_snapshot_skip_dirs = {
-            ".git",
-            ".gitignore",
-            "__pycache__",
-            ".pytest_cache",
-            ".mypy_cache",
-            ".venv",
-            "venv",
-            "env",
-            "node_modules",
-            ".ruff_cache",
-            "tool_outputs",  # written by evaluator for long tool outputs
-        }
-        baseline_files: set[str] = set()
-        baseline_dirs: set[str] = set()
-        if removed_by_difficulty_filters:
-            baseline_files, baseline_dirs = self._snapshot_tree_paths(
-                env_dir, skip_dir_names=workspace_snapshot_skip_dirs
-            )
+            ".git", "__pycache__", ".pytest_cache", ".mypy_cache",
+            ".venv", "venv", "env", "node_modules", ".ruff_cache", "tool_outputs",
+}
+
 
         # Build the initial task description for the purple agent
         task_description = self._build_task_prompt(task, domain, use_mcp)
@@ -1641,58 +1620,31 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                             "metadata": answer_metadata,
                         }
                     )
-                if removed_by_difficulty_filters:
+                if reproducibility_targets:
+                    # Debug: what did the agent create?
                     try:
                         final_files, final_dirs = self._snapshot_tree_paths(
                             env_dir, skip_dir_names=workspace_snapshot_skip_dirs
                         )
-                        created_files = sorted(final_files - baseline_files - {f for f in final_files if 'venv' in f.split(os.sep)} )
-                        # ignore venv files in reproducability debug
-                        created_dirs = sorted(final_dirs - baseline_dirs - {d for d in final_dirs if 'venv' in d.split(os.sep)})
-                        logger.debug("Created files: %s", created_files)
-                        logger.debug("Created dirs: %s", created_dirs)
-
-                        logger.info(
-                            "📁 Reproducibility debug: %d new files, %d new dirs under capsule root",
-                            len(created_files),
-                            len(created_dirs),
-                        )
-
-                        max_list = 60
-                        if created_files:
-                            logger.info("   New files:")
-                            for rel_path in created_files[:max_list]:
-                                logger.info("   + %s", rel_path)
-                            if len(created_files) > max_list:
-                                logger.info("   ... (%d more files)", len(created_files) - max_list)
-
-                        if created_dirs:
-                            logger.info("   New dirs:")
-                            for rel_path in created_dirs[:max_list]:
-                                logger.info("   + %s/", rel_path)
-                            if len(created_dirs) > max_list:
-                                logger.info("   ... (%d more dirs)", len(created_dirs) - max_list)
-
+                        created_files = sorted(final_files - baseline_files)
+                        created_dirs = sorted(final_dirs - baseline_dirs)
+                        
+                        # Filter out venv stuff
+                        created_files = [f for f in created_files if 'venv' not in f]
+                        created_dirs = [d for d in created_dirs if 'venv' not in d]
+                        
+                        logger.info(f"📁 Agent created: {len(created_files)} files, {len(created_dirs)} dirs")
+                        for f in created_files[:20]:
+                            logger.info(f"   + {f}")
+                        
                         if trace:
-                            max_trace = 200
-                            trace.add(
-                                {
-                                    "type": "workspace_diff",
-                                    "flow": "green -> trace",
-                                    "turn": steps_used,
-                                    "root": env_dir,
-                                    "skip_dir_names": sorted(workspace_snapshot_skip_dirs),
-                                    "created_files_count": len(created_files),
-                                    "created_dirs_count": len(created_dirs),
-                                    "created_files": created_files[:max_trace],
-                                    "created_dirs": created_dirs[:max_trace],
-                                    "truncated": (
-                                        len(created_files) > max_trace or len(created_dirs) > max_trace
-                                    ),
-                                }
-                            )
+                            trace.add({
+                                "type": "workspace_diff",
+                                "created_files": created_files[:200],
+                                "created_dirs": created_dirs[:200],
+                            })
                     except Exception as e:
-                        logger.warning(f"Failed to snapshot capsule contents for reproducibility debug: {e}")
+                        logger.warning(f"Failed to snapshot: {e}")
                 break
 
             # Agent requested a tool that isn't available (or MCP is disabled).
@@ -1787,16 +1739,18 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.info(f"      Submitted: {sub_str}")
 
         
-        # 2. REPRODUCIBILITY
+        #  REPRODUCIBILITY
         reproducibility_metrics: Optional[ReproducibilityMetrics] = None
-        if removed_by_difficulty_filters:
-            logger.info(f"2️⃣  Computing reproducibility...")
-            reproducibility_metrics = evaluate_reproducibility(
-                self._workspace_dir, 
-                removed_by_difficulty_filters
-            )
-            logger.info(f"   ✓ Restored: {reproducibility_metrics.restored_count}/{reproducibility_metrics.targets_count} ({reproducibility_metrics.restoration_rate:.1%})")
-        
+
+        if check_reproducibility:
+            logger.info("2️⃣  Computing reproducibility...")
+            reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
+            
+            if reproducibility_metrics.success:
+                logger.info(f"   ✅ Reproduced: {reproducibility_metrics.reason}")
+            else:
+                logger.info(f"   ❌ Not reproduced: {reproducibility_metrics.reason}")
+
         # Count command timeouts for task adherence context
         command_timeouts = sum(
             1 for r in tool_result_events
