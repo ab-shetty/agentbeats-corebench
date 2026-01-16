@@ -116,8 +116,18 @@ To provide the final answer, respond with:
 
 class CoreBenchPurpleAgent(AgentExecutor):
     """
-    Purple agent that emits tool intent only.
-    Tool execution is handled entirely by the green evaluator.
+    CoreBench Purple Agent. Purple agent that emits tool intent only.
+
+    This agent is responsible for:
+    - Maintaining conversation state per context_id
+    - Emitting *tool intent only* (no tool execution)
+    - Generating and updating ReAct-style plans
+    - Tracking token usage for analysis and benchmarking
+
+    Design notes:
+    - Tool execution is explicitly delegated to a downstream "green" evaluator.
+    - This agent only reasons, plans, and outputs structured tool calls.
+    - Supports both hosted APIs and self-hosted OpenAI-compatible vLLM endpoints.
     """
 
     def __init__(self):
@@ -555,6 +565,20 @@ Example:
 # =========================
 
 def prepare_agent_card(url: str) -> AgentCard:
+    """
+    Construct and return an AgentCard describing the CoreBench Purple Agent.
+
+    This AgentCard is used for agent discovery and capability advertisement.
+    It declares the agent as a reasoning-only component that emits structured
+    tool intent but does not execute tools itself.
+
+    Args:
+        url: URL where the agent can be reached
+
+    Returns:
+        An AgentCard instance fully describing the CoreBench Purple Agent,
+        including its skills, capabilities, and supported I/O modes.
+    """
     skill = AgentSkill(
         id="corebench_reasoning",
         name="CoreBench Task Reasoning",
