@@ -12,6 +12,7 @@ This agent:
 """
 import argparse
 import asyncio
+from dataclasses import asdict
 import json
 import logging
 import re
@@ -24,7 +25,6 @@ import uuid
 from typing import Any, Optional, Dict
 from pathlib import Path
 from datetime import datetime, timezone
-from pathlib import Path
 import os
 
 import numpy as np
@@ -90,6 +90,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("a2a").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 
 RESPOND_ACTION_NAME = "FINAL_ANSWER"
@@ -130,7 +131,6 @@ EASY_CONSTRAINTS = [
     "⚠️ EASY MODE - The experiments have ALREADY RUN.",
     "⛔️ NEGATIVE CONSTRAINT: Do NOT read .py files. The answer is NOT in the code logic.",
     "⛔️ NEGATIVE CONSTRAINT: Do NOT execute python code.",
-    "Step 1: Run 'ls -R' to find result files (e.g. results/output, logs/run.log).",
     "Step 2: If a file is large or contains errors at the top, DO NOT GIVE UP.",
     "Step 3: Use 'grep' (via execute_bash) to find specific keywords like 'accuracy', 'score', 'test', or 'result' inside the file.",
     "Example: execute_bash(command='grep -i \"accuracy\" results/output')",
@@ -698,43 +698,91 @@ class CoreBenchEvaluator(GreenAgent):
         os.makedirs(self._workspace_dir, exist_ok=True)
         logger.debug("Workspace reset complete")
     
-    def _apply_difficulty_filters(self, domain: str) -> tuple[list[str], list[str]]:
+    def _apply_difficulty_filters(self, domain: str) -> tuple[bool, list[str]]:
         """
         Remove files based on difficulty level.
-    
+
         Returns:
-            True if results/ was removed
+            Tuple of (results_removed: bool, deleted_files: list[str])
         """
-        removed_results = False        
+        import glob
+
+        removed_results = False
+        deleted_files: list[str] = []
         env_dir = os.path.join(self._workspace_dir, "environment")
         results_dir = os.path.join(env_dir, "results")
-        
+
         def _rel(abs_path: str) -> str:
             return os.path.relpath(abs_path, self._workspace_dir)
-        
+
         # MEDIUM/HARD: Remove results
         if domain in ("corebench_medium", "corebench_hard"):
             if os.path.isdir(results_dir):
                 logger.info(f"Removing results/ for {domain}")
                 shutil.rmtree(results_dir)
                 removed_results = True
-        
-        # HARD: Remove additional files (but don't expect agent to recreate these)
+                deleted_files.append("environment/results/")
+
+        # HARD: Remove documentation and run scripts
         if domain == "corebench_hard":
-            paths_to_remove = [
+            # Exact paths to remove (known locations)
+            exact_paths = [
                 os.path.join(env_dir, "REPRODUCING.md"),
                 os.path.join(env_dir, "environment"),
                 os.path.join(env_dir, "code", "run.sh"),
                 os.path.join(env_dir, "code", "run"),
             ]
-            
-            for abs_path in paths_to_remove:
+
+            # Pattern-based paths to search for (go deeper)
+            patterns = [
+                os.path.join(env_dir, "**", "README.md"),
+                os.path.join(env_dir, "**", "REPRODUCING.md"),
+                os.path.join(env_dir, "**", "run.sh"),
+                os.path.join(env_dir, "**", "run"),
+                os.path.join(env_dir, "code", "**", "run.sh"),
+                os.path.join(env_dir, "code", "**", "run"),
+            ]
+
+            # Remove exact paths
+            for abs_path in exact_paths:
                 if os.path.exists(abs_path):
+                    rel_path = _rel(abs_path)
                     if os.path.isfile(abs_path):
+                        logger.info(f"Removing file for hard mode: {rel_path}")
                         os.remove(abs_path)
+                        deleted_files.append(rel_path)
                     else:
+                        logger.info(f"Removing directory for hard mode: {rel_path}")
                         shutil.rmtree(abs_path)
-        return removed_results
+                        deleted_files.append(f"{rel_path}/")
+
+            # Search and remove pattern-matched files
+            pattern_matches: list[str] = []
+            for pattern in patterns:
+                matches = glob.glob(pattern, recursive=True)
+                for match in matches:
+                    if os.path.exists(match) and match not in [p for p in exact_paths if os.path.exists(p)]:
+                        pattern_matches.append(match)
+
+            if pattern_matches:
+                logger.info(f"🔍 Found {len(pattern_matches)} additional files via pattern matching:")
+                for match in pattern_matches:
+                    rel_path = _rel(match)
+                    logger.info(f"   - {rel_path}")
+                    if os.path.isfile(match):
+                        os.remove(match)
+                        deleted_files.append(f"{rel_path} (pattern)")
+                    elif os.path.isdir(match):
+                        shutil.rmtree(match)
+                        deleted_files.append(f"{rel_path}/ (pattern)")
+
+        # Log summary of deleted files for debugging
+        if deleted_files:
+            logger.info(f"[HARD MODE] Deleted {len(deleted_files)} files/dirs: {deleted_files}")
+        else:
+            logger.info(f"[HARD MODE] No files matched for deletion")
+
+        return removed_results, deleted_files
     
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         """
@@ -783,8 +831,6 @@ class CoreBenchEvaluator(GreenAgent):
                 logger.error("MCP client not initialized")
                 return "Error: MCP client not initialized"
             
-            logger.debug(f"Calling MCP tool: {tool_name} with args: {json.dumps(arguments, indent=2)}")
-            
             result = await self._mcp_client.call_tool(tool_name, arguments)
             # logger.debug(f"MCP tool result length: {len(result)} chars")
             return result
@@ -797,86 +843,61 @@ class CoreBenchEvaluator(GreenAgent):
 
 
     def _hint_for_tool_result(self, tool_name: str, tool_result: str) -> Optional[str]:
-        """Return a short, actionable hint to purple agent based on common tool failure patterns."""
+        """Return a short diagnostic hint to purple agent based on common tool/container failure patterns.
+        Filter out infrastructure noise, but force the agent to solve actual code logic."""
+        # Safety check for empty/None results
+        if not tool_result:
+            return None
+
         text = tool_result.lower()
 
-        # Architecture / TensorFlow Specifics
-        if "no matching distribution found for tensorflow" in text:
-            return (
-                "TensorFlow wheel not available for this Python/platform. "
-                "Prefer running the capsule using its provided Docker image (see `REPRODUCING.md` or `Dockerfile`). "
-                "If you're on an ARM host and the capsule's image/binaries are x86_64, add `--platform linux/amd64` to `docker run`."
-            )
-
-        if "exec format error" in text:
-            return (
-                "Architecture mismatch (e.g., x86_64 binary on an ARM host). "
-                "Prefer using the capsule's Docker image. If you are on ARM and need to run x86_64, add `--platform linux/amd64` to `docker run`."
-            )
+        # Ignore successful bash commands
+        if tool_name == "execute_bash" and "exit code: 0" in text:
+            return None
+        # Ignore successful file reads/edits (assuming they don't start with "Error")
+        if not tool_result.strip().startswith("Error") and "traceback" not in text:
+            return None
         
-        # Python Environment Management
+        if not tool_result.strip().startswith("Error") and "traceback" not in text:
+            return None
+        
+        # --- INFRASTRUCTURE & ENVIRONMENT ERRORS ---
+        
+        # Architecture Mismatch
+        if "arm64" in text and "tensorflow" in text:
+            return "CRITICAL: Host architecture incompatible. You MUST run via Docker (x86 emulation required)."
+        
+        if "no matching distribution" in text or "could not find a version" in text or "exec format error" in text:
+            return "Install failed: Binary incompatible with current OS/Arch. Use the provided Docker image."
+        
+        # Python Environment
         if "externally-managed-environment" in text:
-            return "System Python is locked. Create a venv: `python3 -m venv myenv && source myenv/bin/activate` before installing."
-       
-        # File System Guidance
-        if "error reading file:" in text and "not a regular file" in text:
-            # Check if the agent was looking for the specific missing file
-            if "REPRODUCING.md" in tool_name or "REPRODUCING.md" in text:
-                 return (
-                    "The file 'REPRODUCING.md' appears to be missing. "
-                    "If `find` cannot locate it, you are likely in a Hard Mode task where instructions were deleted. "
-                    "You must instead inspect 'Dockerfile' or 'code/README.md' "
-                    "to figure out the correct run commands."
-                )
-            
-            # Generic file not found hint
-            return (
-                "The path is likely a directory or does not exist. "
-                "CoreBench stages files under the current working directory (capsule root). "
-                "Use `find . -name filename` to locate it first."
-            )
-
-        # Code Ocean container path accessed outside container
-        if "/data" in text and ("cannot access" in text or "no such file or directory" in text):
-            return (
-                "The path `/data/` is a Code Ocean container path. In CoreBench, the capsule root is the current directory; "
-                "use `data/` (and `results/`) as relative paths, or run inside the provided Docker container if required."
-            )
+            return "System Python is write-protected (PEP 668). Create and use a virtual environment (venv)."
         
-        # Shell Limitations
-        if "source: not found" in text:
-            return "The shell doesn't support `source`. Use `. venv/bin/activate` instead."
-
-        if "sudo: a password is required" in text:
-            return "Root access is not available. Do not use sudo."
+        # Container vs. Local Path Confusion
+        if "/data" in text and ("no such file" in text or "cannot access" in text):
+            return "Path not found. Remember: Tools run in the capsule root. Do not prefix paths with `/data` or `environment/`. Use relative paths like `results/` or `code/`."
         
-        if "tools/call" in text and "timed out" in text:
-            return "The command likely ran longer than the MCP timeout; try splitting into smaller steps or increasing timeouts."
+        
+        # --- LEVEL TOOL-SPECIFIC USAGE ERRORS ---
+        if tool_name == "edit_file" and "could not find exact match" in text:
+            return "String mismatch. The `old_str` must match the file content exactly (including whitespace/indentation)."
 
-        # Common results parsing patterns
-        if tool_name == "execute_bash":
-            # HTML visualizations are common for figure questions.
-            if "visualize_results.html" in text or (".html" in text and "results/" in text):
-                return (
-                    "This capsule includes an HTML visualization. If a question references a figure, "
-                    "read the HTML with `inspect_file_as_text(file_path='results/visualize_results.html')` "
-                    "and search within it for the needed labels/values. Some plots are embedded as base64 images "
-                    "(`data:image/...;base64,`), which you can extract and decode via shell if needed."
-                )
+        if tool_name == "inspect_file_as_text" and ("error reading file" in text or "not a regular file" in text):
+            if "reproducing.md" in text or "readme.md" in text:
+                return "File not found. Standard documentation is missing. Analyze other project files to infer build/run steps."
+            return "File read error. Ensure the path is correct and points to a file, not a directory."
 
-            # sklearn-style classification report (often includes the metric as a standalone number nearby)
-            if (
-                "precision" in text
-                and "recall" in text
-                and "f1-score" in text
-                and "accuracy" in text
-                and ("macro avg" in text or "weighted avg" in text)
-            ):
-                return (
-                    "This output looks like a classification report. If asked for accuracy/error, "
-                    "do NOT summarize—extract the exact numeric value from the results file. "
-                    "Try `grep -n -i \"accuracy\" results/output | tail -n 20` and/or `tail -n 120 results/output`."
-                )
+        # Python Interpreter Errors
+        if tool_name == "python_interpreter" and "modulenotfounderror" in text:
+            return "Module missing in interpreter. Note: The interpreter has a limited environment. Use `execute_bash` to run scripts in the full shell environment."
+        
+        # Pydantic
+        if "validation error" in text and "field required" in text:
+            return "Tool usage error: You missed a required argument. Check the tool definition and retry."
+        
+        if "timed out" in text:
+            return "Tool timeout. Split your work into smaller steps."
 
         return None
 
@@ -894,7 +915,6 @@ class CoreBenchEvaluator(GreenAgent):
         path = os.path.join(out_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(tool_result)
-
         # Return a path relative to the capsule root so the agent can read it with inspect_file_as_text.
         return f"tool_outputs/{filename}"
 
@@ -929,7 +949,7 @@ class CoreBenchEvaluator(GreenAgent):
             )
         if hint:
             msg += f"Hint: {hint}\n\n"
-        msg += "Please continue with your task."
+        msg += "Please continue."
         return msg
 
 
@@ -944,51 +964,35 @@ class CoreBenchEvaluator(GreenAgent):
            (tool calls + tool results), then score the final answer.
         4) Report final metrics. 
         """
-        logger.info(f"=" * 80)
-        logger.info(f"🚀 STARTING COREBENCH EVALUATION")
-        logger.info(f"=" * 80)
-        
         start_time = time.time()
-        
-        # Generate unique run ID for correlating all task traces in this evaluation
         run_id = str(uuid.uuid4())[:8]
-        logger.info(f"📋 Run ID: {run_id}")
 
-        # Create a per-run trace folder: logs/traces/<YYYYMMDD>_<run_id>_<domain>/
-        runday = datetime.now(timezone.utc).strftime('%Y%m%d')
-        domain = req.config["domain"]
-        base_trace_dir = Path(os.getenv("COREBENCH_TRACE_DIR") or os.getenv("COREBENCH_LOG_DIR") or "logs") / "traces"
-        run_trace_dir = base_trace_dir / f"{runday}_{run_id}_{domain}"
-        run_trace_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"🗂️  Run trace dir: {run_trace_dir}")
-
+        # Extract config
         domain = req.config["domain"]
         task_ids = req.config.get("task_ids", None)
         num_tasks = req.config.get("num_tasks", None)
         task_index = req.config.get("task_index", None)
         max_steps = req.config.get("max_steps", 200)
-        
-        # LLM-as-judge model configuration
-        # By default, use the same model as the purple agent (from env vars)
-        # Can be overridden in scenario.toml config
-        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL", "Qwen/Qwen3-Coder-30B-A3B-Instruct")
-        judge_llm = req.config.get("judge_llm", default_judge_model)
-        
+        use_cache = req.config.get("use_cache", False)  # Whether to cache capsules for reuse
         user_llm_args = req.config.get("user_llm_args", {})
         keep_traces = req.config.get("keep_traces", False)  # Whether to keep trace files after run
-        use_cache = req.config.get("use_cache", False)  # Whether to cache capsules for reuse
 
-        logger.info(f"Domain: {domain}")
-        logger.info(f"Num tasks: {num_tasks}")
-        if task_index is not None:
-            logger.info(f"Task index: {task_index}")
-        logger.info(f"Max steps: {max_steps}")
-        logger.info(f"Keep traces: {keep_traces}")
-        logger.info(f"Use cache: {use_cache}")
-        use_cache = req.config.get("use_cache", False)  # Whether to cache capsules for reuse
+        # LLM-as-judge model
+        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "nebius/openai/gpt-oss-120b"
+        judge_llm = req.config.get("judge_llm", default_judge_model) # if override in scenario.toml exists
 
-        logger.info(f"📊 Domain: {domain} | Tasks: {num_tasks or 'all'} | Max Steps: {max_steps}")
+        logger.info(f"=" * 80)
+        logger.info(f"🚀 STARTING COREBENCH EVALUATION | Run ID: {run_id}")
+        logger.info(f"📊 Domain: {domain} | Tasks: {num_tasks or 'all'}{f' (index {task_index})' if task_index else ''} | Max Steps: {max_steps}")
         logger.info(f"🤖 Judge Model: {judge_llm}")
+        logger.info(f"Keep traces: {keep_traces} | Use cache: {use_cache}")
+
+        # Create a per-run trace folder: logs/traces/<YYYYMMDD>_<run_id>_<domain>/
+        runday = datetime.now(timezone.utc).strftime('%Y%m%d')
+        base_trace_dir = Path(os.getenv("COREBENCH_TRACE_DIR") or os.getenv("COREBENCH_LOG_DIR") or "logs") / "traces"
+        run_trace_dir = base_trace_dir / f"{runday}_{run_id}_{domain}"
+        run_trace_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"🗂️  Run trace dir: {run_trace_dir}")
         
         # MCP server configuration
         use_mcp = req.config.get("use_mcp", False)
@@ -1012,10 +1016,10 @@ class CoreBenchEvaluator(GreenAgent):
             # Ensure workspace exists before starting MCP server
             self._reset_workspace()
 
-        # Get task IDs
+        # Get task IDs - is this the same as num tasks and ID's above?
         resolved_task_ids = get_task_ids(domain, task_ids, num_tasks, task_index)
-        logger.info(f"📝 Running {len(resolved_task_ids)} tasks")
-        logger.info("")
+        logger.debug(f"📝 Running {len(resolved_task_ids)} tasks")
+        logger.debug("")
 
         await updater.update_status(
             TaskState.working,
@@ -1030,9 +1034,7 @@ class CoreBenchEvaluator(GreenAgent):
         try:
             for idx, task in enumerate(resolved_task_ids, 1):
                 task_id = task["capsule_id"]
-                logger.info(f"\n{'=' * 80}")
-                logger.info(f"📦 TASK {idx}/{len(resolved_task_ids)}: {task_id}")
-                logger.info(f"{'=' * 80}\n")
+                logger.info(f"📦 TASK [{idx}/{len(resolved_task_ids)}] Starting {task_id}")
                 
                 await updater.update_status(
                     TaskState.working,
@@ -1057,13 +1059,11 @@ class CoreBenchEvaluator(GreenAgent):
                     task_cost_metadata.append(cost_meta)
                     
                     # Show task summary
-                    logger.info(f"\n{'─' * 80}")
                     logger.info(f"✅ Task {task_id} Complete:")
                     logger.info(f"   Accuracy: {task_evaluation.accuracy.accuracy:.1%} ({task_evaluation.accuracy.correct_answers}/{task_evaluation.accuracy.total_questions})")
                     logger.info(f"   Task Adherence: {task_evaluation.task_adherence.score:.2f}/1.0")
                     logger.info(f"   Steps: {task_evaluation.efficiency.steps_used}/{max_steps}")
-                    logger.info(f"{'─' * 80}\n")
-                    
+
                 except Exception as e:
                     logger.error(f"❌ Task {task_id} failed: {e}")
                     logger.debug(traceback.format_exc())
@@ -1086,7 +1086,7 @@ class CoreBenchEvaluator(GreenAgent):
                         accuracy=_empty_accuracy_metrics(),
                         reproducibility=None,
                         task_adherence=TaskAdherenceMetrics(
-                            score=0.0, followed_instructions=False, navigation_quality="poor",
+                            score=0.0, followed_instructions=False, navigation_quality="na",
                             reasoning=f"Task failed: {e}", strengths=[], weaknesses=["Task execution failed"]
                         ),
                         efficiency=EfficiencyMetrics(
@@ -1139,7 +1139,6 @@ class CoreBenchEvaluator(GreenAgent):
             logger.info(f"📊 Mean Accuracy: {aggregate.mean_accuracy:.1%}")
             logger.info(f"📋 Mean Task Adherence: {aggregate.mean_adherence:.2f}/1.0")
 
-            # Fix: use task_evaluations, not tasks
             if track_restoration:
                 num_reproduced = sum(
                     1 for t in task_evaluations 
@@ -1223,6 +1222,21 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 name="Result",
             )
 
+            # Write run summary to trace folder
+            if run_trace_dir:
+                summary_path = run_trace_dir / f"run_summary_{run_id}.json"
+                with open(summary_path, "w") as f:
+                    json.dump({
+                        "run_id": run_id,
+                        "domain": domain,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "num_tasks": len(resolved_task_ids),
+                        "task_ids": [t["capsule_id"] for t in resolved_task_ids],
+                        "model_used": model_used,
+                        "aggregate_metrics": asdict(aggregate) if aggregate else None,
+                    }, f, indent=2, default=str)
+                logger.info(f"📄 Run summary written to: {summary_path}")
+
         finally:
             self._tool_provider.reset()
             # Clean up MCP client
@@ -1289,7 +1303,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             trace_dir = base_trace_dir / f"{run_day}_{run_id or 'unknown'}_{domain if domain else 'unknown'}"
         trace_dir.mkdir(parents=True, exist_ok=True)
         trace_stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        trace_jsonl = trace_dir / f"trace_{run_id}_{trace_stamp}_{task_id}.jsonl"
+        trace_jsonl = trace_dir / f"{domain}_{trace_stamp}_{task_id}.jsonl"
 
         logger.info(f"📝 Writing trace to: {trace_jsonl}")
 
@@ -1299,7 +1313,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             trace.add(
                 {
                     "type": "task_start",
-                    "flow": "green -> trace",
                     "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "task_id": task_id,
                     "domain": domain,
@@ -1347,7 +1360,16 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             os.rename(capsule_path, env_dir)
 
         # Apply difficulty filters (and remember what we removed for restoration metrics).
-        check_reproducibility = self._apply_difficulty_filters(domain)
+        check_reproducibility, deleted_files = self._apply_difficulty_filters(domain)
+
+        # Add trace event for deleted files (useful for debugging judge decisions)
+        if trace and deleted_files:
+            trace.add({
+                "type": "difficulty_filter",
+                "domain": domain,
+                "deleted_files": deleted_files,
+                "note": "These files were deleted before the agent started. Agent cannot read them.",
+            })
 
         # Initialize MCP client after staging so PWD is workspace/environment
         if use_mcp:
@@ -1370,8 +1392,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         workspace_snapshot_skip_dirs = {
             ".git", "__pycache__", ".pytest_cache", ".mypy_cache",
             ".venv", "venv", "env", "node_modules", ".ruff_cache", "tool_outputs",
-}
-
+        }
 
         # Build the initial task description for the purple agent
         task_description = self._build_task_prompt(task, domain, use_mcp)
@@ -1410,8 +1431,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     new_conversation=is_first_message,
                 )
                 response_preview = response[:300] + "..." if len(response) > 300 else response
-                logger.info(f"Purple agent response ({len(response)} chars): {response_preview}")
-                logger.debug(f"Full response: {response}")
+                logger.debug(f"Purple agent response ({len(response)} chars): {response_preview}")
             except Exception as e:
                 logger.error(f"Failed to communicate with purple agent: {e}")
                 logger.debug(traceback.format_exc())
@@ -1432,27 +1452,31 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             try:
                 action, tool_result = await self._parse_and_execute_tools(response, use_mcp)
                 protocol_errors = 0
-                if trace:
-                    trace.add(
-                        {
-                            "type": "action",
-                            "flow": "purple -> green",
-                            "turn": steps_used,
-                            "name": action.name,
-                            "arguments": action.arguments,
-                        }
-                    )
+                # Note: action is now traced as tool_call (lines 1488-1496) instead of here
             except Exception as e:
                 protocol_errors += 1
                 logger.warning(f"Invalid agent response (protocol_errors={protocol_errors}/{max_protocol_errors}): {e}")
                 logger.debug(traceback.format_exc())
                 if trace:
+                    # Classify the error type for better analysis
+                    error_str = str(e).lower()
+                    if "json" in error_str or "decode" in error_str or "parse" in error_str:
+                        error_type = "json_decode"
+                    elif "missing" in error_str or "required" in error_str:
+                        error_type = "missing_field"
+                    elif "valid" in error_str or "type" in error_str or "expected" in error_str:
+                        error_type = "validation"
+                    else:
+                        error_type = "unknown"
+
                     trace.add(
                         {
                             "type": "protocol_error",
                             "flow": "purple -> green",
                             "turn": steps_used,
-                            "error": str(e),
+                            "error_type": error_type,
+                            "error_message": str(e),
+                            "raw_response_preview": response[:500] if response else "",
                         }
                     )
 
@@ -1469,7 +1493,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 )
                 continue
 
-            # Log what the agent requested (tool call details)
+            # Log what the agent requested
             logger.info(f"📤 Agent requested: {action.name}")
             args_preview = json.dumps(action.arguments, indent=2, default=str)
             if len(args_preview) > 500:
@@ -1478,8 +1502,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
             if tool_result is not None:
                 result_preview = tool_result[:300] + "..." if len(tool_result) > 300 else tool_result
-                logger.info(f"Tool result ({len(tool_result)} chars): {result_preview}")
-                logger.debug(f"Full tool result: {tool_result}")
+                logger.debug(f"Tool result ({len(tool_result)} chars): {result_preview}")
+                #logger.debug(f"Full tool result: {tool_result}")
                 tool_exec_index += 1
                 
                 # Extract key info for logging
@@ -1487,7 +1511,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 if action.name == "execute_bash":
                     # Get command from arguments
                     cmd = action.arguments.get("command", "")
-                    cmd_display = cmd[:80] + "..." if len(cmd) > 80 else cmd
+                    # Shorten display since we already saw it in the "Agent requested" log
+                    cmd_display = cmd[:50] + "..." if len(cmd) > 50 else cmd
                     
                     # Extract exit code
                     match = re.search(r"Exit Code:\s*(\d+)", tool_result)
@@ -1496,7 +1521,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     
                     # Show command and exit status
                     status = f"✓ Exit {exit_code}" if exit_code == 0 else f"❌ Exit {exit_code}"
-                    logger.info(f"🔧 execute_bash: {cmd_display} → {status}")
+                    logger.info(f"🔧 bash finished: {cmd_display} → {status}")
                     
                     # Show truncated output (first 3 lines)
                     output_lines = tool_result.split('\n')
@@ -1526,7 +1551,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     logger.info(f"   Result: {tool_result[:250]}")
                     
                 else:
-                    # Generic tool logging
+                    # catch all for all other tools
                     logger.info(f"🔧 {action.name}")
                     if tool_result and len(tool_result) > 100:
                         logger.info(f"   Result: {tool_result[:200]}...")
@@ -1553,7 +1578,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                             "exit_code": exit_code,
                             "timed_out": "timed out" in tool_result.lower() or "timeout" in tool_result.lower(),
                             "hint": self._hint_for_tool_result(action.name, tool_result),
-                            "summary": self._summarize_tool_result(tool_result, head_lines=25, tail_lines=25),
+                            "summary": self._summarize_tool_result(tool_result, head_lines=15, tail_lines=15),
                         }
                     )
                 next_message = self._format_tool_result_for_agent(tool_name=action.name, tool_result=tool_result, index=tool_exec_index)
@@ -1649,7 +1674,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                        f"output_tokens={output_tokens}, cost=N/A (model not in price dict)")
 
         # Extract data from trace for LLM-as-judge evaluations
-        action_trace = trace.get_events("action") if trace else []
+        # Note: action_trace is removed - we now use tool_call_events for _build_action_summary()
         tool_call_events = trace.get_events("tool_call") if trace else []
         tool_result_events = trace.get_events("tool_result") if trace else []
         tool_calls_count = len(tool_call_events)
@@ -1665,7 +1690,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         for i, key in enumerate(expected_keys, 1):
             expected_val = gt_result[0].get(key, "<missing>")
             # Check if agent submitted by number or by key
-            submitted_val = reported_result.get(str(i)) or reported_result.get(key, "<not submitted>")
+            submitted_val = reported_result.get(key, "<not submitted>")
             match = "✓" if key in [r.question for r in accuracy_metrics.question_results if r.correct] else "✗"
             # Truncate long values for display
             exp_str = str(expected_val)[:50] + "..." if len(str(expected_val)) > 50 else str(expected_val)
@@ -1679,14 +1704,10 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         #  REPRODUCIBILITY
         reproducibility_metrics: Optional[ReproducibilityMetrics] = None
         if check_reproducibility:
-            logger.info("2️⃣  Computing reproducibility...")
             reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
+            status = "✅" if reproducibility_metrics.success else "❌"
+            logger.info(f"   Reproducibility: {status} {reproducibility_metrics.reason}")
             
-            if reproducibility_metrics.success:
-                logger.info(f"   ✅ {reproducibility_metrics.reason}")
-            else:
-                logger.info(f"   ❌ {reproducibility_metrics.reason}")
-
         # Count command timeouts for task adherence context
         command_timeouts = sum(
             1 for r in tool_result_events
@@ -1695,8 +1716,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             or "timeout" in str(r.get("summary", "")).lower()
         )
         
-        # 4. TASK ADHERENCE
-        logger.info(f"4️⃣  Computing task adherence (LLM judge: {judge_llm})...")
+        # TASK ADHERENCE
         trace_event_callback = trace.add if trace else None
         adherence_metrics = await evaluate_task_adherence(
             domain=domain,
@@ -1706,7 +1726,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             protocol_errors=protocol_errors,
             submitted=reported_result,
             accuracy_result=accuracy_metrics,
-            action_trace=action_trace,
+            action_trace=tool_call_events,
             tool_calls=tool_call_events,
             tool_results=tool_result_events,
             workspace_dir=self._workspace_dir,
@@ -1714,7 +1734,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             judge_model=judge_llm,
             command_timeouts=command_timeouts,
         )
-        logger.info(f"   ✓ Score: {adherence_metrics.score:.2f}/1.0")
+        logger.info(f"   ✓ Adherence Score: {adherence_metrics.score:.2f}/1.0")
         logger.info(f"   ✓ Navigation Quality: {adherence_metrics.navigation_quality}")
         if adherence_metrics.reasoning:
             logger.info(f"\n   💭 Judge Reasoning (Task Adherence):")
@@ -1723,7 +1743,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     logger.info(f"      {line}")
             logger.info("")
         
-        # 5. EFFICIENCY
+        # EFFICIENCY
         efficiency_metrics = compute_efficiency(
             steps_used=steps_used,
             max_steps=max_steps,
@@ -1751,10 +1771,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             task_cost=cost_metadata.get("cost") if cost_metadata else None,
         )
         
-        # Log evaluation summary
+        # Add evaluation to trace as dict
         eval_dict = evaluation.to_dict()
-        logger.info(f"Evaluation summary: {json.dumps(eval_dict, indent=2, default=str)}")
-        
+
         # add evaluation to trace
         if trace:
             trace.add({"type": "evaluation", "flow": "green -> trace", "evaluation": eval_dict})

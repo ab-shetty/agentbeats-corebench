@@ -6,13 +6,12 @@ cmd = "python scenarios/corebench/corebench_evaluator.py --host 127.0.0.1 --port
 role = "agent"
 endpoint = "http://127.0.0.1:9019"
 # Add --model to override default LLM (can also be done in env file). 
-# Examples: --model gpt-4o, --model meta-llama/Llama-3.3-70B-Instruct
 cmd = "python scenarios/corebench/corebench_agent.py --host 127.0.0.1 --port 9019"
 
 [config]
 domain = "corebench_hard"  # Options: corebench_easy, corebench_medium, corebench_hard
 num_tasks = 7               # Number of tasks to evaluate
-task_ids = ["capsule-8807709", "capsule-6049678", "capsule-9641396", "capsule-6003668", "capsule-8234136"] # "capsule-8536428", 
+# task_ids = ["capsule-8807709", "capsule-6049678", "capsule-9641396", "capsule-6003668", "capsule-8234136"] # "capsule-8536428",
 use_mcp = true
 mcp_server_command = ["uv", "run", "mcp", "run", "scenarios/corebench/mcp_server.py"]
 keep_traces = true           # Keep trace files in logs/traces/ for debugging

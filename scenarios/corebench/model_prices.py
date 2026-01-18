@@ -9,6 +9,7 @@ MODEL_PRICES_DICT = {
                 "google/gemini-2.5-flash": {"prompt_tokens": 0.30/1e6, "completion_tokens": 2.5/1e6},
                 "google/gemini-2.5-flash-lite": {"prompt_tokens": 0.10/1e6, "completion_tokens": 0.40/1e6},
                 "nebius/openai/gpt-oss-120b": {"prompt_tokens": 0.15/1e6, "completion_tokens": 0.6/1e6},
+                "openai/gpt-oss:120b": {"prompt_tokens": 0.15/1e6, "completion_tokens": 0.6/1e6},
                 "nebius/moonshotai/Kimi-K2-Instruct": {"prompt_tokens": 0.50/1e6, "completion_tokens": 2.40/1e6},
                 "nebius/moonshotai/Kimi-K2-Thinking": {"prompt_tokens": 0.60/1e6, "completion_tokens": 2.50/1e6},
                 "nebius/Qwen/Qwen3-Coder-480B-A35B-Instruct": {"prompt_tokens": 0.40/1e6, "completion_tokens": 1.80/1e6},

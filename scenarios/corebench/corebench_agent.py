@@ -50,12 +50,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("a2a").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
-
-# Configuration:
-# - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
-# - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
-# - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
+# Configuration in .env:
+# Only API_KEYS set -> DEFAULT_MODEL
+# Also COREBENCH_** set → self-hosted, prepends "openai/"
 DEFAULT_MODEL = "nebius/openai/gpt-oss-120b"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
@@ -159,12 +158,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
             logger.warning(f"Failed to load planning prompts from {prompts_file}: {e}")
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
-        """
-        Build litellm.completion kwargs.
-
-        If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM with api_base/api_key
-        Otherwise → pass model to litellm as-is (provider prefix already included)
-        """
+        """Build litellm.completion kwargs."""
         if TEXT_API_BASE:
             # Self-hosted vLLM: OpenAI-compatible endpoint
             model = TEXT_MODEL
@@ -509,7 +503,7 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                logger.info("Response sent successfully")
+                # logger.info("Response sent successfully")
                 
                 # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
