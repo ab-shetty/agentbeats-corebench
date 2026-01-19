@@ -722,7 +722,7 @@ class CoreBenchEvaluator(GreenAgent):
                 removed_results = True
                 deleted_files.append("environment/results/")
 
-        # HARD: Remove README, environment and run scripts
+        # HARD: Remove REPRODUCING.md, environment/ and run scripts
         if domain == "corebench_hard":
             paths_to_remove = [
                 os.path.join(env_dir, "REPRODUCING.md"),
