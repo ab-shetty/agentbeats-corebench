@@ -4,9 +4,19 @@ Both evaluator and agent write to the same timestamped log file
 """
 import logging
 import sys
+import pytz
 from pathlib import Path
 from datetime import datetime
 import os
+
+# Format log timestamp as PST timezone
+class PSTFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, pytz.timezone('US/Pacific'))
+        if datefmt:
+            return dt.strftime(datefmt)
+        else:
+            return dt.isoformat()
 
 # Global log file path - set once at startup
 _LOG_FILE = None
@@ -48,7 +58,7 @@ def setup_logging(component_name: str):
         # Detailed file logging
         file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(
+        file_formatter = PSTFormatter(
             '%(asctime)s | %(levelname)-8s | %(name)-20s | %(funcName)-20s:%(lineno)-4d | %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
@@ -58,7 +68,7 @@ def setup_logging(component_name: str):
         # Console logging
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(
+        console_formatter = PSTFormatter(
             '%(asctime)s | %(levelname)-8s | %(message)s',
             datefmt='%H:%M:%S'
         )

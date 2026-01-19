@@ -6,12 +6,14 @@ CoreBench is a computational reproducibility benchmark that tests whether AI age
 can execute code from scientific papers and reproduce their reported results.
 
 ## Files
-| `corebench_agent.py`     | Purple agent - LLM reasoning, emits tool intents         |
-| `corebench_evaluator.py` | Green agent - orchestration, task loading, evaluation    |
-| `mcp_server.py`          | MCP tool server (bash execution, file ops)               |
-| `metrics.py`             | Evaluation metrics module (accuracy, faithfulness, etc.) |
-| `scenario.toml`          | Configuration (endpoints, domain, task count)            |
-| `core_test.json`         | Task definitions with ground truth answers               |
+| File                     | Description                                           |
+| ------------------------ | ----------------------------------------------------- |
+| `corebench_agent.py`     | Purple agent - LLM reasoning, emits tool intents      |
+| `corebench_evaluator.py` | Green agent - orchestration, task loading, evaluation |
+| `mcp_server.py`          | MCP tool server (bash execution, file ops)            |
+| `metrics.py`             | Evaluation metrics module                             |
+| `scenario.toml`          | Configuration (endpoints, domain, task count)         |
+| `core_test.json`         | Task definitions with ground truth answers            |
 
 ## Evaluation Metrics
 
@@ -19,7 +21,6 @@ can execute code from scientific papers and reproduce their reported results.
 | ------------------- | --------------------------------------------------------------------- |
 | **Accuracy**        | Answer correctness using 95% prediction intervals for numeric values  |
 | **Reproducibility** | File restoration quality - files must have content (medium/hard only) |
-| **Faithfulness**    | LLM-as-judge: are answers grounded in tool execution evidence?        |
 | **Task Adherence**  | LLM-as-judge: did agent follow instructions properly?                 |
 | **Efficiency**      | Steps used, tool calls made, execution time                           |
 
@@ -27,11 +28,11 @@ can execute code from scientific papers and reproduce their reported results.
 
 Configure via `domain` in `scenario.toml`:
 
-| Domain             | What's Removed                              | Challenge                                |
-| ------------------ | ------------------------------------------- | ---------------------------------------- |
-| `corebench_easy`   | Nothing                                     | Execute existing code, extract results   |
-| `corebench_medium` | `results/` folder                           | Re-run experiments to regenerate results |
-| `corebench_hard`   | `results/` + `REPRODUCING.md` + run scripts | Figure out how to run from scratch       |
+| Domain             | What's Removed                                       | Challenge                                                          |
+| ------------------ | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `corebench_easy`   | Nothing                                              | Execute existing code, extract results                             |
+| `corebench_medium` | `results/` folder                                    | Re-run experiments to regenerate results                           |
+| `corebench_hard`   | `results/` + All README/markdown files + run scripts | Figure out how to run from scratch and reproduce results asked for |
 
 ## Configuration
 

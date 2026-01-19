@@ -651,8 +651,7 @@ def evaluate_reproducibility(
 ) -> ReproducibilityMetrics:
     """Check if agent produced outputs in results/."""
     from pathlib import Path
-    
-    MIN_FILE_SIZE = 10
+
     results_path = Path(workspace_dir) / results_dir_rel
     
     if not results_path.exists():
@@ -682,7 +681,7 @@ def evaluate_reproducibility(
         if f.is_file():
             try:
                 size = f.stat().st_size
-                if size >= MIN_FILE_SIZE:
+                if size >= MIN_FILE_SIZE_BYTES:
                     output_files.append(str(f.relative_to(results_path)))
                     total_bytes += size
             except OSError:
@@ -727,21 +726,43 @@ Task prompt: {task_prompt}
 ## Domain-Specific Success Criteria
 
 ### MEDIUM MODE (corebench_medium)
-**Gold Standard:** Read README.md → Execute documented command (usually Docker) → Handle errors → Generate output
+**Gold Standard:** Read markdown instructions → Execute documented command (usually Docker) → Handle errors → Generate output
 
 **Automatic Disqualifiers (cap score at 0.3):**
-- Never read README.md
+- Never read markdown instructions
 - Read pre-existing results instead of executing
 - Never attempted documented command
 
 ### HARD MODE (corebench_hard)
-**Gold Standard:** Check Dockerfile/README → Infer execution method → Attempt Docker/script execution → Debug errors → Generate output
+**Context:** In hard mode, the following are DELETED:
+- REPRODUCING.md (step-by-step reproduction instructions)
+- code/run.sh and code/run (entry point scripts)
+- environment/ nested directory
+- results/ directory
+
+**NOT deleted (available to agent):**
+- README.md files (project documentation - agent can use these!)
+- Dockerfile, requirements.txt, and other dependency files
+- All source code files
+
+The agent must figure out how to run the code by:
+- Reading README.md for project context and setup instructions
+- Reading the target script to understand dependencies
+- Checking for Dockerfile, requirements.txt
+- Inferring execution method from the code itself
+
+**Gold Standard:** Analyze code/scripts → Identify dependencies → Set up environment → Execute target script → Debug errors → Generate output
 
 **Automatic Disqualifiers (cap score at 0.3):**
-- Never explored documentation (Dockerfile/README)  
 - Read pre-existing results instead of executing
-- Never attempted to run scripts
+- Never attempted to run the target script
 - Made no effort to resolve dependency errors
+- Gave up without trying alternative approaches
+
+**NOT a disqualifier in hard mode:**
+- Not reading README.md IF the capsule doesn't have one (check capsule_context_debug.docs)
+- Using code analysis as a discovery method (reading script source to understand dependencies)
+- Not finding Dockerfile IF one doesn't exist for this capsule
 
 ### EASY MODE (corebench_easy)
 **Gold Standard:** List results/ directory → Read output files → Extract exact values → DO NOT execute code
@@ -937,6 +958,9 @@ def _build_capsule_context(
             overview_lines.append(f"- {rel_path}")
         if len(docs) > 30:
             overview_lines.append(f"- ... ({len(docs) - 30} more)")
+    else:
+        overview_lines.append("**No documentation files found in this capsule.**")
+        overview_lines.append("Note: In hard mode, REPRODUCING.md is deleted but README.md files are preserved.")
     if excluded:
         overview_lines.append("Excluded docs:")
         for item in excluded[:20]:
@@ -1041,7 +1065,7 @@ async def evaluate_task_adherence(
     tool_results: Optional[list[dict[str, Any]]] = None,
     workspace_dir: Optional[str] = None,
     trace_event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
-    judge_model: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    judge_model: str = "nebius/openai/gpt-oss-120b", # match DEFAULT_MODEL
     command_timeouts: int = 0,
 ) -> TaskAdherenceMetrics:
     """Use LLM-as-judge to evaluate task execution quality."""
@@ -1080,54 +1104,28 @@ async def evaluate_task_adherence(
         answer_summary=answer_summary,
     )
     
-    # Use same API configuration as purple agent
+    # Same API configuration logic as corebench_agent.py
     api_base = (os.environ.get("COREBENCH_TEXT_API_BASE") or "").strip()
-    api_key = (os.environ.get("COREBENCH_TEXT_API_KEY") or os.environ.get("NEBIUS_API_KEY") or "").strip()
+    api_key = (os.environ.get("COREBENCH_TEXT_API_KEY") or "").strip()
     
-    if not api_base:
-        # Fall back to Nebius API
-        api_base = "https://api.tokenfactory.nebius.com/v1/"
-        api_key = os.environ.get("NEBIUS_API_KEY", "")
-    
-    if not api_key:
-        logger.error("No API key set for LLM-as-judge evaluation (checked COREBENCH_TEXT_API_KEY and NEBIUS_API_KEY)")
+    if api_base:
+        # Self-hosted mode: prepend openai/ for custom endpoint
         model_name = judge_model
         if not model_name.startswith("openai/"):
-            model_name = f"openai/{judge_model}"
-        if trace_event_callback is not None:
-            try:
-                trace_event_callback(
-                    {
-                        "type": "llm_judge_skipped",
-                        "judge": "task_adherence",
-                        "flow": "green -> judge",
-                        "domain": domain,
-                        "model": model_name,
-                        "reason": "missing_api_key",
-                        "api_base": api_base,
-                        "has_api_key": False,
-                        "prompt": prompt,
-                    }
-                )
-            except Exception as e:
-                logger.warning(f"Failed to write task adherence judge skipped trace: {e}")
-        return TaskAdherenceMetrics(
-            score=0.0,
-            followed_instructions=False,
-            navigation_quality="poor",
-            reasoning="Evaluation failed: No API key available",
-            strengths=[],
-            weaknesses=[],
-            status="error",
-            error_message="No API key configured for LLM-as-judge",
-        )
+            model_name = f"openai/{model_name}"
+        completion_kwargs = {
+            "model": model_name,
+            "api_base": api_base,
+            "api_key": api_key or "dummy",
+        }
+    else:
+        # Cloud mode: pass model to litellm as-is (provider prefix handles routing)
+        model_name = judge_model
+        completion_kwargs = {
+            "model": model_name,
+        }
+    logger.debug(f"Task adherence judge using model={model_name}")
     
-    # LiteLLM needs openai/ prefix when using custom api_base
-    model_name = judge_model
-    if not model_name.startswith("openai/"):
-        model_name = f"openai/{judge_model}"
-    logger.debug(f"Task adherence judge using model={model_name}, api_base={api_base}")
-
     if trace_event_callback is not None:
         try:
             trace_event_callback(
@@ -1156,11 +1154,9 @@ async def evaluate_task_adherence(
 
     try:
         response = await litellm.acompletion(
-            model=model_name,
-            api_base=api_base,
-            api_key=api_key,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
+            **completion_kwargs,    # contains model, api_base, api_key
         )
         
         raw_content = response.choices[0].message.content
@@ -1221,16 +1217,16 @@ async def evaluate_task_adherence(
 
 def _build_action_summary(action_trace: list[dict], max_actions: int = 30) -> str:
     """
-    Build a summary of purple agent actions and the MCP server results. 
+    Build a summary of purple agent tool calls and the MCP server results. 
     """
-    
+
     # Helper to format a single event string
     def _format_event(event: dict) -> str:
-        if event.get("type") != "action":
+        if event.get("type") != "tool_call":
             return ""
-            
+
         turn = event.get("turn", "?")
-        name = event.get("name", "unknown")
+        name = event.get("tool", "unknown")  # tool_call events use "tool" field
         args = event.get("arguments", {})
         
         if name == "execute_bash":

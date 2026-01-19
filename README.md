@@ -146,14 +146,17 @@ uv run python test_mcp_tools_jsonrpc_full.py
 agentbeats-corebench/
 ├── scenarios/
 │   └── corebench/
-│       ├── scenario.toml          # Scenario config (endpoints, model args, task count)
-│       ├── corebench_agent.py     # Purple agent - LLM reasoning, emits tool intents
-│       ├── corebench_evaluator.py # Green agent - orchestrates tasks, evaluates results
-│       ├── mcp_server.py          # MCP tool server (file ops, bash, etc.)
-│       ├── mdconvert.py           # Markdown/document conversion utilities
+│       ├── scenario.toml          # Scenario config
+│       ├── corebench_agent.py     # Purple agent
+│       ├── corebench_evaluator.py # Green agent
+│       ├── mcp_server.py          # MCP tool server
+│       ├── mdconvert.py           # Markdown conversion utilities
 │       ├── planning_prompts.yaml  # ReAct planning prompts (from smolagents MultiStepAgent)
-│       ├── shared_logging.py      # Centralized logging setup
-│       └── workspace/             # Cloned repos & task execution sandbox
+│       ├── core_test.json         # Task definitions    
+│       ├── metrics/               # Evaluation metrics       
+│       ├── capsules/              # Downloaded research capsules
+│       ├── workspace/             # Capsule execution sandbox
+│       └── shared_logging.py      
 ├── src/agentbeats/
 │   ├── run_scenario.py            # Main CLI entrypoint (agentbeats-run)
 │   ├── client.py                  # A2A client implementation
@@ -161,10 +164,9 @@ agentbeats-corebench/
 │   ├── tool_provider.py           # MCP tool integration
 │   └── models.py                  # Shared data models
 ├── logs/
-│   └── traces/                    # Execution traces (JSONL + Markdown)
+│   └── traces/                    
 ├── sample.env                     # Template for environment variables
-├── pyproject.toml                 # Python dependencies (uv)
-└── README.md
+└── pyproject.toml                 # Python dependencies (uv)
 ```
 
 ### Key Components
@@ -180,11 +182,11 @@ agentbeats-corebench/
 
 ## Troubleshooting
 
-| Issue                 | Solution                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------ |
+| Issue                 | Solution                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
 | **Command timed out** | Increase `timeout` in `mcp_server.py` (default 900s/15min). Heavy ML on ARM64 emulation may need more. |
-| **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow.   |
-| **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.       |
+| **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow.         |
+| **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.             |
 
 ---
 
@@ -222,4 +224,4 @@ sequenceDiagram
     Note over Green: All tasks completed
 ```
 
-(See the [https://github.com/RDI-Foundation/agentbeats-tutorial[(AgentBeats tutorial) for an explanation of concepts such as green and purple agents, and technical documentation)
+(See the [AgentBeats tutorial](https://github.com/RDI-Foundation/agentbeats-tutorial) for an explanation of concepts such as green and purple agents, and technical documentation)

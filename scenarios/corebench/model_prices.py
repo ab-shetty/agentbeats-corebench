@@ -3,6 +3,7 @@ MODEL_PRICES_DICT = {
                 "openai/gpt-5-nano": {"prompt_tokens": 0.05/1e6, "completion_tokens": 0.4/1e6},
                 "openai/gpt-5-mini": {"prompt_tokens": 0.25/1e6, "completion_tokens": 2/1e6},
                 "openai/gpt-5.2": {"prompt_tokens": 1.75/1e6, "completion_tokens": 14/1e6},
+                "openai/gpt-oss:120b": {"prompt_tokens": 0.15/1e6, "completion_tokens": 0.6/1e6},
                 "google/gemini-3-pro-preview": {"prompt_tokens": 2.00/1e6, "completion_tokens": 12.00/1e6},
                 "google/gemini-3-flash-preview": {"prompt_tokens": 0.50/1e6, "completion_tokens": 3.00/1e6},
                 "google/gemini-2.5-pro": {"prompt_tokens": 1.25/1e6, "completion_tokens": 10.00/1e6},
