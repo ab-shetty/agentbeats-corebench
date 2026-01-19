@@ -651,8 +651,7 @@ def evaluate_reproducibility(
 ) -> ReproducibilityMetrics:
     """Check if agent produced outputs in results/."""
     from pathlib import Path
-    
-    MIN_FILE_SIZE = 10
+
     results_path = Path(workspace_dir) / results_dir_rel
     
     if not results_path.exists():
@@ -682,7 +681,7 @@ def evaluate_reproducibility(
         if f.is_file():
             try:
                 size = f.stat().st_size
-                if size >= MIN_FILE_SIZE:
+                if size >= MIN_FILE_SIZE_BYTES:
                     output_files.append(str(f.relative_to(results_path)))
                     total_bytes += size
             except OSError:
@@ -735,9 +734,21 @@ Task prompt: {task_prompt}
 - Never attempted documented command
 
 ### HARD MODE (corebench_hard)
-**Context:** In hard mode, markdown and run scripts are DELETED. The agent must figure out how to run the code by:
+**Context:** In hard mode, the following are DELETED:
+- REPRODUCING.md (step-by-step reproduction instructions)
+- code/run.sh and code/run (entry point scripts)
+- environment/ nested directory
+- results/ directory
+
+**NOT deleted (available to agent):**
+- README.md files (project documentation - agent can use these!)
+- Dockerfile, requirements.txt, and other dependency files
+- All source code files
+
+The agent must figure out how to run the code by:
+- Reading README.md for project context and setup instructions
 - Reading the target script to understand dependencies
-- Checking for Dockerfile, requirements.txt, or code/README.md (if they exist)
+- Checking for Dockerfile, requirements.txt
 - Inferring execution method from the code itself
 
 **Gold Standard:** Analyze code/scripts → Identify dependencies → Set up environment → Execute target script → Debug errors → Generate output
@@ -749,8 +760,9 @@ Task prompt: {task_prompt}
 - Gave up without trying alternative approaches
 
 **NOT a disqualifier in hard mode:**
-- Not reading README/Dockerfile IF they don't exist (check capsule_context_debug.docs)
-- The agent reading the script source code IS a valid discovery method
+- Not reading README.md IF the capsule doesn't have one (check capsule_context_debug.docs)
+- Using code analysis as a discovery method (reading script source to understand dependencies)
+- Not finding Dockerfile IF one doesn't exist for this capsule
 
 ### EASY MODE (corebench_easy)
 **Gold Standard:** List results/ directory → Read output files → Extract exact values → DO NOT execute code
@@ -947,8 +959,8 @@ def _build_capsule_context(
         if len(docs) > 30:
             overview_lines.append(f"- ... ({len(docs) - 30} more)")
     else:
-        overview_lines.append("**No documentation files available.** In hard mode, markdown instructions are deleted.")
-        overview_lines.append("Agent must infer execution from code analysis.")
+        overview_lines.append("**No documentation files found in this capsule.**")
+        overview_lines.append("Note: In hard mode, REPRODUCING.md is deleted but README.md files are preserved.")
     if excluded:
         overview_lines.append("Excluded docs:")
         for item in excluded[:20]:

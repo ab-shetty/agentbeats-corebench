@@ -131,6 +131,7 @@ EASY_CONSTRAINTS = [
     "⚠️ EASY MODE - The experiments have ALREADY RUN.",
     "⛔️ NEGATIVE CONSTRAINT: Do NOT read .py files. The answer is NOT in the code logic.",
     "⛔️ NEGATIVE CONSTRAINT: Do NOT execute python code.",
+    "Step 1: Run 'ls -R' to find result files (e.g. results/output, logs/run.log).",
     "Step 2: If a file is large or contains errors at the top, DO NOT GIVE UP.",
     "Step 3: Use 'grep' (via execute_bash) to find specific keywords like 'accuracy', 'score', 'test', or 'result' inside the file.",
     "Example: execute_bash(command='grep -i \"accuracy\" results/output')",
@@ -705,8 +706,6 @@ class CoreBenchEvaluator(GreenAgent):
         Returns:
             Tuple of (results_removed: bool, deleted_files: list[str])
         """
-        import glob
-
         removed_results = False
         deleted_files: list[str] = []
         env_dir = os.path.join(self._workspace_dir, "environment")
@@ -723,28 +722,16 @@ class CoreBenchEvaluator(GreenAgent):
                 removed_results = True
                 deleted_files.append("environment/results/")
 
-        # HARD: Remove documentation and run scripts
+        # HARD: Remove README, environment and run scripts
         if domain == "corebench_hard":
-            # Exact paths to remove (known locations)
-            exact_paths = [
+            paths_to_remove = [
                 os.path.join(env_dir, "REPRODUCING.md"),
                 os.path.join(env_dir, "environment"),
                 os.path.join(env_dir, "code", "run.sh"),
                 os.path.join(env_dir, "code", "run"),
             ]
 
-            # Pattern-based paths to search for (go deeper)
-            patterns = [
-                os.path.join(env_dir, "**", "README.md"),
-                os.path.join(env_dir, "**", "REPRODUCING.md"),
-                os.path.join(env_dir, "**", "run.sh"),
-                os.path.join(env_dir, "**", "run"),
-                os.path.join(env_dir, "code", "**", "run.sh"),
-                os.path.join(env_dir, "code", "**", "run"),
-            ]
-
-            # Remove exact paths
-            for abs_path in exact_paths:
+            for abs_path in paths_to_remove:
                 if os.path.exists(abs_path):
                     rel_path = _rel(abs_path)
                     if os.path.isfile(abs_path):
@@ -756,31 +743,11 @@ class CoreBenchEvaluator(GreenAgent):
                         shutil.rmtree(abs_path)
                         deleted_files.append(f"{rel_path}/")
 
-            # Search and remove pattern-matched files
-            pattern_matches: list[str] = []
-            for pattern in patterns:
-                matches = glob.glob(pattern, recursive=True)
-                for match in matches:
-                    if os.path.exists(match) and match not in [p for p in exact_paths if os.path.exists(p)]:
-                        pattern_matches.append(match)
-
-            if pattern_matches:
-                logger.info(f"🔍 Found {len(pattern_matches)} additional files via pattern matching:")
-                for match in pattern_matches:
-                    rel_path = _rel(match)
-                    logger.info(f"   - {rel_path}")
-                    if os.path.isfile(match):
-                        os.remove(match)
-                        deleted_files.append(f"{rel_path} (pattern)")
-                    elif os.path.isdir(match):
-                        shutil.rmtree(match)
-                        deleted_files.append(f"{rel_path}/ (pattern)")
-
         # Log summary of deleted files for debugging
         if deleted_files:
-            logger.info(f"[HARD MODE] Deleted {len(deleted_files)} files/dirs: {deleted_files}")
+            logger.info(f"[{domain}] Deleted {len(deleted_files)} files/dirs: {deleted_files}")
         else:
-            logger.info(f"[HARD MODE] No files matched for deletion")
+            logger.info(f"No files matched for deletion")
 
         return removed_results, deleted_files
     
@@ -843,61 +810,31 @@ class CoreBenchEvaluator(GreenAgent):
 
 
     def _hint_for_tool_result(self, tool_name: str, tool_result: str) -> Optional[str]:
-        """Return a short diagnostic hint to purple agent based on common tool/container failure patterns.
-        Filter out infrastructure noise, but force the agent to solve actual code logic."""
+        """Return a short context clue for the Purple Agent based on select tool failure patterns.
+
+        Only hints that provide value beyond the original error message are included.
+        Hints should clarify cryptic errors, not repeat information or give away solutions.
+        """
         # Safety check for empty/None results
         if not tool_result:
             return None
 
         text = tool_result.lower()
 
-        # Ignore successful bash commands
+        # Filter successful results
+        # Bash exit code 0 = success, no hint needed
         if tool_name == "execute_bash" and "exit code: 0" in text:
             return None
-        # Ignore successful file reads/edits (assuming they don't start with "Error")
+        # Non-error results without tracebacks are successful
+        # Bash errors (Exit Code 1) contain "traceback" so they pass through
         if not tool_result.strip().startswith("Error") and "traceback" not in text:
             return None
-        
-        if not tool_result.strip().startswith("Error") and "traceback" not in text:
-            return None
-        
-        # --- INFRASTRUCTURE & ENVIRONMENT ERRORS ---
-        
-        # Architecture Mismatch
-        if "arm64" in text and "tensorflow" in text:
-            return "CRITICAL: Host architecture incompatible. You MUST run via Docker (x86 emulation required)."
-        
-        if "no matching distribution" in text or "could not find a version" in text or "exec format error" in text:
-            return "Install failed: Binary incompatible with current OS/Arch. Use the provided Docker image."
-        
-        # Python Environment
-        if "externally-managed-environment" in text:
-            return "System Python is write-protected (PEP 668). Create and use a virtual environment (venv)."
-        
-        # Container vs. Local Path Confusion
-        if "/data" in text and ("no such file" in text or "cannot access" in text):
-            return "Path not found. Remember: Tools run in the capsule root. Do not prefix paths with `/data` or `environment/`. Use relative paths like `results/` or `code/`."
-        
-        
-        # --- LEVEL TOOL-SPECIFIC USAGE ERRORS ---
-        if tool_name == "edit_file" and "could not find exact match" in text:
-            return "String mismatch. The `old_str` must match the file content exactly (including whitespace/indentation)."
 
+        # File read errors
+        # MCP returns "Error reading file: Not a regular file" which is cryptic
+        # This hint clarifies that the path might be a directory, not a file
         if tool_name == "inspect_file_as_text" and ("error reading file" in text or "not a regular file" in text):
-            if "reproducing.md" in text or "readme.md" in text:
-                return "File not found. Standard documentation is missing. Analyze other project files to infer build/run steps."
             return "File read error. Ensure the path is correct and points to a file, not a directory."
-
-        # Python Interpreter Errors
-        if tool_name == "python_interpreter" and "modulenotfounderror" in text:
-            return "Module missing in interpreter. Note: The interpreter has a limited environment. Use `execute_bash` to run scripts in the full shell environment."
-        
-        # Pydantic
-        if "validation error" in text and "field required" in text:
-            return "Tool usage error: You missed a required argument. Check the tool definition and retry."
-        
-        if "timed out" in text:
-            return "Tool timeout. Split your work into smaller steps."
 
         return None
 
@@ -915,6 +852,7 @@ class CoreBenchEvaluator(GreenAgent):
         path = os.path.join(out_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(tool_result)
+
         # Return a path relative to the capsule root so the agent can read it with inspect_file_as_text.
         return f"tool_outputs/{filename}"
 
@@ -949,7 +887,7 @@ class CoreBenchEvaluator(GreenAgent):
             )
         if hint:
             msg += f"Hint: {hint}\n\n"
-        msg += "Please continue."
+        msg += "Please continue with your task."
         return msg
 
 
@@ -1145,7 +1083,7 @@ class CoreBenchEvaluator(GreenAgent):
                     if t.reproducibility and t.reproducibility.success
                 )
                 reproduction_rate = num_reproduced / len(task_evaluations) if task_evaluations else 0
-                logger.info(f"🔬 Reproduction Rate: {num_reproduced}/{len(task_evaluations)} ({reproduction_rate:.1%})")
+                logger.info(f"🔬 Reproducability Rate: {num_reproduced}/{len(task_evaluations)} ({reproduction_rate:.1%})")
 
             logger.info(f"⚡ Avg Steps: {aggregate.mean_steps:.1f}")
 
@@ -1551,7 +1489,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     logger.info(f"   Result: {tool_result[:250]}")
                     
                 else:
-                    # catch all for all other tools
+                    # Generic catch all for all other tools
                     logger.info(f"🔧 {action.name}")
                     if tool_result and len(tool_result) > 100:
                         logger.info(f"   Result: {tool_result[:200]}...")
@@ -1674,7 +1612,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                        f"output_tokens={output_tokens}, cost=N/A (model not in price dict)")
 
         # Extract data from trace for LLM-as-judge evaluations
-        # Note: action_trace is removed - we now use tool_call_events for _build_action_summary()
         tool_call_events = trace.get_events("tool_call") if trace else []
         tool_result_events = trace.get_events("tool_result") if trace else []
         tool_calls_count = len(tool_call_events)
@@ -1689,7 +1626,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         expected_keys = list(gt_result[0].keys()) if gt_result else []
         for i, key in enumerate(expected_keys, 1):
             expected_val = gt_result[0].get(key, "<missing>")
-            # Check if agent submitted by number or by key
+            # Retrieve submitted question string
             submitted_val = reported_result.get(key, "<not submitted>")
             match = "✓" if key in [r.question for r in accuracy_metrics.question_results if r.correct] else "✗"
             # Truncate long values for display
@@ -1717,6 +1654,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         )
         
         # TASK ADHERENCE
+        # logger.info(f"4️⃣  Computing task adherence (LLM judge: {judge_llm})...")
         trace_event_callback = trace.add if trace else None
         adherence_metrics = await evaluate_task_adherence(
             domain=domain,

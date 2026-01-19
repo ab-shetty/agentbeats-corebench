@@ -18,5 +18,3 @@ scenarios/corebench/test_mcp_tools.py
 *.log
 logs/
 scenarios/corebench/workspace/
-CLAUDE.md
-./claude
