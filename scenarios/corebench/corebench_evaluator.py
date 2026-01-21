@@ -104,59 +104,18 @@ WORKSPACE_DIR = os.path.join(os.path.dirname(__file__), "workspace")
 # prevent common failure modes observed during benchmark runs.
 # =============================================================================
 
-# General behavioral constraints applicable to all tasks
-COMMON_CONSTRAINTS = [
-    "Role: You are a seasoned research assistant with scientific computing experience.",
-    "No guessing: If unsure, re-open the relevant files or outputs and extract evidence; do not invent values.",
-    "Precision: Copy numeric values exactly as written; do not round unless the question asks for it.",
-    "Answer format: For each question, return ONLY the value (number/label). Do not add explanations or sentences.",
-    "Verification: Prefer targeted searches (grep/find) over repeatedly listing directories.",
-    "Images: If a question references a figure/plot/chart, locate the image under results/ before using the vision tool.",
-]
-
 # Constraints specific to MCP tool usage
 TOOL_CONSTRAINTS = [
-    "File Reading: Use 'inspect_file_as_text' to read code, documentation, or text-based results.",
-    "Vision: To analyze images (plots, charts, figures), use 'query_vision_language_model' with the image path.",
-    "Vision Questions: Questions starting with 'fig' or mentioning 'figure/plot/chart' typically REQUIRE using 'query_vision_language_model' on the relevant image file.",
-    "Search: If you need external documentation, use 'web_search' sparingly.",
-    "Working Directory: Tools run in the capsule root (the folder that contains code/, results/, data/). Use paths like 'results/' or 'code/', not 'environment/results'.",
     "Shell State: The 'execute_bash' tool is STATELESS. 'cd' commands do NOT persist between calls. Use relative paths from the capsule root or chain commands (e.g. 'cd code && python run.py').",
-    "Large Outputs: Avoid `cat` on long logs (tool output may be truncated). Prefer `grep`/`tail` or `inspect_file_as_text` to target the exact lines you need.",
-    "Timeouts: Long-running commands may timeout. Break complex operations into smaller steps.",
 ]
-
-# Easy mode: just read results, don't execute code
-EASY_CONSTRAINTS = [
-    "⚠️ EASY MODE - The experiments have ALREADY RUN.",
-    "⛔️ NEGATIVE CONSTRAINT: Do NOT read .py files. The answer is NOT in the code logic.",
-    "⛔️ NEGATIVE CONSTRAINT: Do NOT execute python code.",
-    "Step 1: Run 'ls -R' to find result files (e.g. results/output, logs/run.log).",
-    "Step 2: If a file is large or contains errors at the top, DO NOT GIVE UP.",
-    "Step 3: Use 'grep' (via execute_bash) to find specific keywords like 'accuracy', 'score', 'test', or 'result' inside the file.",
-    "Example: execute_bash(command='grep -i \"accuracy\" results/output')",
-    "Tip: Many outputs contain multiple occurrences of a metric; the requested value is often near the END. Use `tail -n 200 results/output` and `grep -n -i <keyword> results/output | tail -n 20` to find the final value.",
-    "Step 4: Extract the EXACT numeric value. If the file has 'libcudart' errors, ignore them and look for the final metrics at the bottom."
-]
-
-# Medium mode: follow REPRODUCING.md instructions
-MEDIUM_CONSTRAINTS = [
-    "Instructions: Read 'REPRODUCING.md' FIRST to understand how to run the capsule.",
-    "Existing Results: If results already exist in 'results/', read them before re-running code.",
-    "Docker Preferred: If REPRODUCING.md mentions Docker, use the Docker command rather than installing dependencies manually.",
-    "Output Location: After running code, check 'results/' or the working directory for output files.",
-    "Fallback: If local Python execution fails repeatedly, try using the Docker container described in REPRODUCING.md instead of giving up.",
-]
-
-# Hard mode: no instructions, must infer from Dockerfile/README
-HARD_CONSTRAINTS = [
-    "No Instructions: In Hard Mode, REPRODUCING.md is deleted. You must infer how to run the code.",
-    "Discovery: Check 'code/README.md', 'Dockerfile', or 'code/run.sh' for clues.",
-    "Dependencies: Check for 'requirements.txt' in './' or 'code/' and install dependencies.",
-    "Docker Strategy: If a Dockerfile exists, your primary goal should be to build/run that container (with --platform linux/amd64 if needed).",
-    "Fallback: If Docker fails, try to manually replicate the Dockerfile's RUN commands.",
-]
-
+    # "File Reading: Use 'inspect_file_as_text' to read code, documentation, or text-based results.",
+    # "Vision: To analyze images (plots, charts, figures), use 'query_vision_language_model' with the image path.",
+    # "Vision Questions: Questions starting with 'fig' or mentioning 'figure/plot/chart' typically REQUIRE using 'query_vision_language_model' on the relevant image file.",
+    # "Search: If you need external documentation, use 'web_search' sparingly.",
+    # "Working Directory: Tools run in the capsule root (the folder that contains code/, results/, data/). Use paths like 'results/' or 'code/', not 'environment/results'.",
+    # "Shell State: The 'execute_bash' tool is STATELESS. 'cd' commands do NOT persist between calls. Use relative paths from the capsule root or chain commands (e.g. 'cd code && python run.py').",
+    # "Large Outputs: Avoid `cat` on long logs (tool output may be truncated). Prefer `grep`/`tail` or `inspect_file_as_text` to target the exact lines you need.",
+    # "Timeouts: Long-running commands may timeout. Break complex operations into smaller steps.",
 
 class AgentAction(BaseModel):
     """Validated JSON envelope for purple-agent outputs."""
@@ -1767,9 +1726,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         4. Response format instructions
         """
         observation = str(task["results"][0].keys())
-        task_prompt_text = task.get("task_prompt", "")
+        task_prompt = task["task_prompt"]
         logger.debug(f"Observation keys: {observation}")
-        logger.debug(f"Task prompt: {task_prompt_text}")
+        logger.debug(f"Task prompt: {task_prompt}")
 
         # Build tools section
         tools_section = "No MCP tools available."
@@ -1782,7 +1741,7 @@ You have access to the following MCP tools (use ONE tool at a time):
         
         # Format questions with numbers for readability (keys should be the question text itself).
         questions = list(task["results"][0].keys())
-        numbered_questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+        json_fields = str(task["results"][0].keys())
         required_keys = questions
         required_keys_json = json.dumps(required_keys, indent=2, ensure_ascii=False)
         final_answer_example_content = {q: f"<ANSWER_{i+1}>" for i, q in enumerate(questions)}
@@ -1790,33 +1749,23 @@ You have access to the following MCP tools (use ONE tool at a time):
         # Build domain-specific instruction and constraints
         if domain == "corebench_easy":
             objective = (
-                f"Your goal is to answer questions about the output of scientific code. "
-                f"Read through the files in `results/` to answer these questions:\n\n{numbered_questions}\n\n"
-                f"**You should NOT run or execute any code.** All answers are available in the results directory."
+                f"Task: codeocean_easy\n\nYou should read through the files in the `environment/results` directory to answer the following questions: {json_fields}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. **You should not actually run or execute any code.** All answers can be obtained by reading through the results directory."
             )
-            domain_constraints = EASY_CONSTRAINTS
+
         elif domain == "corebench_medium":
             objective = (
-                f"Your goal is to test the computational reproducibility of a scientific code capsule. "
-                f"Specifically, you need to {task_prompt_text} to answer these questions:\n\n{numbered_questions}\n\n"
-                f"Read `REPRODUCING.md` for instructions on how to run the capsule."
+                f"codeocean_medium\n\nYour goal is to test the computational reproducibility of the repository cloned to your current directory, which is code from a scientific paper. Specifically, you need to {task_prompt} to answer the following questions: {json_fields}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. You should read the instructions on how to reproduce the capsule in REPRODUCING.md."
             )
-            domain_constraints = MEDIUM_CONSTRAINTS
         elif domain == "corebench_hard":
             objective = (
-                f"Your goal is to test the computational reproducibility of a scientific code capsule. "
-                f"Specifically, you need to {task_prompt_text} to answer these questions:\n\n{numbered_questions}\n\n"
-                f"No reproduction instructions are provided. You must figure out how to run the code yourself."
+                f"Task: codeocean_hard\n\nYour goal is to test the computational reproducibility of the repository cloned to your current directory, which is code from a scientific paper. Specifically, you need to {task_prompt} to answer the following questions: {json_fields}. Your submitted answer should be a Python dictionary whose keys are exactly those questions and values are the answers. You should install all of the requirements found in the Readme file and then run the commands necessary to answer the questions."
             )
-            domain_constraints = HARD_CONSTRAINTS
         else:
             raise ValueError(f"Unknown domain: {domain}")
 
         all_constraints: list[str] = []
         if use_mcp:
             all_constraints.extend(TOOL_CONSTRAINTS)
-        all_constraints.extend(COMMON_CONSTRAINTS)
-        all_constraints.extend(domain_constraints)
         constraints_text = "\n".join(f"- {c}" for c in all_constraints)
         logger.debug(f"Built prompt with {len(all_constraints)} constraints for domain: {domain}")
 
