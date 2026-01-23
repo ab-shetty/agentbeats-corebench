@@ -1,6 +1,39 @@
 # Capsule File Layout
 
 Base directory: `scenarios/corebench/capsules/`
+Capsule directory pattern:
+├── capsule-<ID>/
+│   ├── code/
+│   │   ├── README.md
+│   │   ├── ... (.py, .ipynb, .xlsx, .R, .sh)
+│   │
+│   ├── data/
+│   │   ├── ...(.csv, .txt, .json, .zip, .png files ...)
+│   │   └── LICENSE
+│   ├── environment/
+│   │   └── Dockerfile
+│   ├── metadata/
+│   │   └── metadata.yml
+│   ├── downloads/
+│   ├── REPRODUCING.md
+│   └── README.md
+
+
+Workspace directory (hardmode): `workspace/environment/`
+workspace/
+├── environment/
+│   └── code/
+│   │   ├── LICENSE
+│   │   ├── (README.md)
+│   │   └── (code files...)
+│   ├── data/
+│   │   ├── LICENSE
+│   │   └── (data files...)
+│   ├── metadata/
+│   ├── downloads/
+│   │   └── (empty)
+│   ├── (README.md)
+├── results/
 
 Capsules scanned: `27`
 
@@ -16,7 +49,7 @@ Note: Schema lists are not mutually exclusive (capsules with multiple `readme*` 
 
 ## README in Capsule Code Dir
 
-`capsule-ID/code/README.md` (16)
+`workspace/environment/code/README.md` (16)
 
 - `capsule-0504157`
 - `capsule-0851068`
@@ -43,12 +76,13 @@ Note: Schema lists are not mutually exclusive (capsules with multiple `readme*` 
   - `capsule-ID/code/readme.pdf` (lowercase, PDF format)
 - `capsule-6049678`
   - `capsule-ID/code/README.txt`
+- `README.Rmd`
 
 ---
 
 ## README in Capsule Root Dir
 
-`capsule-ID/README.md` (7)
+`workspace/environment/README.md` (7)
 
 - `capsule-1394704`
 - `capsule-3262218`
@@ -61,13 +95,13 @@ Note: Schema lists are not mutually exclusive (capsules with multiple `readme*` 
 ### Root Dir Edge Cases (1)
 
 - `capsule-1724988`
-  - `capsule-ID/readme.txt` (lowercase, TXT format)
+  - `workspace/environment/readme.txt` (lowercase, TXT format)
 
 ---
 
 ## README in Environment Dir
 
-`capsule-ID/environment/README.md` (1)
+`workspace/environment/environment/README.md` (1)
 
 - `capsule-9052293` (also has `code/README.md`)
 
@@ -92,7 +126,7 @@ Note: Schema lists are not mutually exclusive (capsules with multiple `readme*` 
 
 All 27 capsules contain a `REPRODUCING.md` file in the capsule root directory.
 
-`capsule-ID/REPRODUCING.md` (27)
+`workspace/environment/REPRODUCING.md` (27)
 
 - `capsule-0504157`
 - `capsule-0851068`
