@@ -168,3 +168,17 @@ All 27 capsules contain a `REPRODUCING.md` file in the capsule root directory.
 | Root (edge cases)       | 1     | txt          |
 | `environment/README.md` | 1     | Markdown     |
 | `REPRODUCING.md` (root) | 27    | Markdown     |
+
+---
+
+## Task Prompt Script References (`core_test.json`)
+
+The CoreBench task list (`scenarios/corebench/core_test.json`) contains 66 task entries total: 45 "base" tasks and 21 "extension" tasks listed in `scenarios/corebench/capsule_extension.json`.
+
+Within the 45 base tasks:
+- 41/45 `task_prompt`s explicitly name a script/notebook filename to run (e.g. `*.py`, `*.R`, `*.Rmd`, `*.ipynb`, `*.sh`).
+- The 4/45 that do not name a specific script/notebook filename are:
+  - `capsule-8536428` — "Run the python files in the folder and its subdirectories. If there are multiple python files in the same directory or subdirectory, only run the train files, not the test files."
+  - `capsule-3593259` — "Run 'physalia_automators.reports' as a python module with /results as the output directory."
+  - `capsule-2345790` — "Set up the following subfolders in the ../results directory: intermediates, figures, stats_figures_markdowns. Run all the .Rmd files using Rscript and render them as html. Store the output files in ../results/stats_figures_markdowns."
+  - `capsule-5136217` — "Make the following subfolders in the ../results directory: tables, figures, for_publication/tables, for_publication/figures. Run all the .R scripts in the ../code folder using Rscript with 'source' and set echo to 'TRUE'."

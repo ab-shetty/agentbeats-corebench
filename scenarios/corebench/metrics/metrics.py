@@ -180,6 +180,24 @@ class ErrorRecoveryMetrics:
 
 
 @dataclass
+class MethodologyScoreBreakdown:
+    """Breakdown of methodology score components for transparency.
+
+    Shows how each factor contributed to the final methodology score,
+    making it easier to understand and debug scoring.
+    """
+    domain: str                          # Which scoring rubric was used
+    doc_read_score: float                # Points from reading documentation
+    script_read_score: float             # Points from reading target scripts
+    execution_coverage_score: float      # Points from execution coverage
+    successful_execution_score: float    # Points from successful execution
+    error_recovery_score: float          # Points from error recovery
+    penalty: float                       # Any penalties applied (negative)
+    violation_cap_applied: bool          # Whether violations capped the score
+    total: float                         # Final score after all components
+
+
+@dataclass
 class MethodologyMetrics:
     """Deterministic methodology metrics extracted from execution traces.
 
@@ -190,6 +208,7 @@ class MethodologyMetrics:
     read_documentation: bool        # Whether agent read README/REPRODUCING.md
     docs_read: list[str]            # List of documentation files that were read
     read_target_script: bool        # Whether agent inspected the script to run
+    scripts_read: list[str]         # List of target script files that were read
 
     # Execution phase
     attempted_execution: bool       # Whether agent tried to run target script
@@ -222,6 +241,7 @@ class MethodologyMetrics:
 
     # Final score
     methodology_score: float = 0.0          # Combined deterministic methodology score (0.0-1.0)
+    score_breakdown: MethodologyScoreBreakdown | None = None  # Detailed breakdown of score components
 
 
 @dataclass
@@ -515,9 +535,18 @@ def _normalize_submitted(submitted: dict) -> dict:
                 pass
 
             # Try extracting numeric value from formatted text
+            # But only if the string looks primarily numeric (not just incidental digits)
+            # e.g., "$6,003.03" -> extract, but "top_2 distances" -> keep as string
             extracted = _extract_numeric_value(value)
             if extracted is not None:
-                submitted[key] = extracted
+                # Check if digits represent a significant portion of the string
+                # This prevents "top_2 distances" (1/14=0.07) from being converted to 2.0
+                # But allows "$1.80 Trillion USD" (3/17=0.18) to be extracted
+                digit_count = sum(1 for c in value if c.isdigit() or c in '.,')
+                non_space_count = sum(1 for c in value if not c.isspace())
+                # Only convert if digits are >15% of content
+                if non_space_count > 0 and digit_count / non_space_count > 0.15:
+                    submitted[key] = extracted
             # Otherwise keep as string (for actual string answers)
 
     return submitted
@@ -1163,16 +1192,15 @@ async def evaluate_task_adherence(
     """
     action_summary = _build_action_summary(action_trace)
 
-    # Build process metrics summary for the judge (replaces answer_summary to avoid bias)
+    # Build process metrics summary for the judge - factual info only, NO scores to avoid anchoring bias
     if methodology_metrics:
         methodology_metrics_summary = f"""Documentation Read: {'Yes' if methodology_metrics.read_documentation else 'No'} ({', '.join(methodology_metrics.docs_read[:3]) if methodology_metrics.docs_read else 'none'})
-Target Script Read: {'Yes' if methodology_metrics.read_target_script else 'No'}
+Target Script Read: {'Yes' if methodology_metrics.read_target_script else 'No'} ({', '.join(methodology_metrics.scripts_read[:5]) if methodology_metrics.scripts_read else 'none'})
 Execution Attempted: {'Yes' if methodology_metrics.attempted_execution else 'No'} ({methodology_metrics.execution_attempts} attempts)
 Execution Succeeded: {'Yes' if methodology_metrics.successful_execution else 'No'}
 Dependencies Installed: {'Yes' if methodology_metrics.installed_dependencies else 'No'}
-Error Recovery Rate: {methodology_metrics.error_recovery.recovery_rate:.1%} ({methodology_metrics.error_recovery.errors_recovered}/{methodology_metrics.error_recovery.total_errors} errors recovered)
-Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.violations else 'None'}
-Deterministic Methodology Score: {methodology_metrics.methodology_score:.2f}"""
+Errors Encountered: {methodology_metrics.error_recovery.total_errors} ({methodology_metrics.error_recovery.errors_recovered} recovered)
+Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.violations else 'None'}"""
     else:
         methodology_metrics_summary = "(Process metrics not available - evaluate from trace)"
 
@@ -1949,6 +1977,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
     """
     # Initialize tracking variables
     docs_read: list[str] = []
+    scripts_read: list[str] = []
     read_documentation = False
     read_target_script = False
     attempted_execution = False
@@ -1987,13 +2016,23 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
 
             # Check for reading target script (code files)
             # Includes Python, Shell, R, R Markdown, Julia, MATLAB, Jupyter notebooks
-            if file_path.endswith((".py", ".sh", ".r", ".R", ".Rmd", ".jl", ".m", ".ipynb")):
+            if file_path.endswith((".py", ".sh", ".r", ".R", ".Rmd", ".jl", ".m", ".ipynb")) and not read_failed:
+                scripts_read.append(file_path)
                 read_target_script = True
 
-            # Track results/ reads for later violation analysis - only applicable for easy mode
-            # if domain == "corebench_hard":
-            #     if "results/" in file_path or "/results" in file_path:
-            #         results_reads_before_execution.append((turn, file_path))
+            # Track results/ reads for later violation analysis
+            if domain == "corebench_hard":
+                if "results/" in file_path or "/results" in file_path or "result_" in file_path:
+                    results_reads_before_execution.append((turn, file_path))
+
+        elif tool == "query_vision_language_model":
+            # Track vision model queries on results/output files (images in results folders)
+            image_path = args.get("image_path", "")
+            if domain == "corebench_hard":
+                # Check if querying images in results-like directories
+                if ("results/" in image_path or "/results" in image_path or
+                    "result_" in image_path or "output" in image_path.lower()):
+                    results_reads_before_execution.append((turn, f"[vision] {image_path}"))
 
         elif tool == "execute_bash":
             cmd = args.get("command", "")
@@ -2020,7 +2059,11 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
             # If no successful execution, any results read is suspicious
             if first_successful_execution_turn is None or read_turn < first_successful_execution_turn:
                 read_preexisting_results = True
-                violations.append(f"Read pre-existing results: {file_path}")
+                # happened for capsule-9670283 where it used vision model of pre-existing results image
+                if file_path.startswith("[vision]"):
+                    violations.append(f"Queried pre-existing results image: {file_path[9:]}")
+                else:
+                    violations.append(f"Read pre-existing results: {file_path}")
 
     # Compute error recovery metrics
     error_recovery = _compute_error_recovery(tool_calls, tool_results)
@@ -2054,7 +2097,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
     stdout_captured = stdout_total_bytes > 0
 
     # Compute methodology score based on domain
-    methodology_score = _compute_methodology_score(domain=domain,
+    methodology_score, score_breakdown = _compute_methodology_score(domain=domain,
         read_documentation=read_documentation,
         read_target_script=read_target_script,
         attempted_execution=attempted_execution,
@@ -2069,6 +2112,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
         read_documentation=read_documentation,
         docs_read=docs_read,
         read_target_script=read_target_script,
+        scripts_read=scripts_read,
         attempted_execution=attempted_execution,
         execution_attempts=execution_attempts,
         successful_execution=successful_execution,
@@ -2083,6 +2127,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
         read_preexisting_results=read_preexisting_results,
         violations=violations,
         methodology_score=methodology_score,
+        score_breakdown=score_breakdown,
     )
 
 
@@ -2096,23 +2141,32 @@ def _compute_methodology_score(
     error_recovery: ErrorRecoveryMetrics,
     violations: list[str],
     execution_coverage: float = 0.0,
-) -> float:
+) -> tuple[float, MethodologyScoreBreakdown]:
     """Compute a deterministic methodology score from 0-1 based on observed behaviors.
 
     The execution_coverage parameter enables partial credit for running some
     but not all expected scripts (parsed from task_prompt). This addresses
     the "stdout problem" where agents may run scripts correctly but not
     produce expected output files and just write results to stdout instead.
+
+    Returns:
+        Tuple of (final_score, breakdown) where breakdown shows each component's contribution.
     """
-    score = 0.0
+    # Initialize component scores
+    doc_read_score = 0.0
+    script_read_score = 0.0
+    execution_coverage_score = 0.0
+    successful_execution_score = 0.0
+    error_recovery_score = 0.0
+    penalty = 0.0
+    violation_cap_applied = False
 
     if domain == "corebench_easy":
-        # Full credit for reading files
+        # Full credit for reading files, penalty for execution attempts
         if not attempted_execution:
-            score = 1.0
-        # Penalty for execution attempts
+            doc_read_score = 1.0  # Treat as "did the right thing"
         else:
-            score = 0.3
+            penalty = -0.7  # Penalty brings score down to 0.3
 
     elif domain == "corebench_medium":
         # - Read docs (25%)
@@ -2120,16 +2174,14 @@ def _compute_methodology_score(
         # - Successful execution (25%)
         # - Error recovery (15%)
         if read_documentation:
-            score += 0.25
-        # Use execution_coverage for partial credit
+            doc_read_score = 0.25
         if execution_coverage > 0:
-            score += 0.35 * execution_coverage
+            execution_coverage_score = 0.35 * execution_coverage
         elif attempted_execution:
-            # Partial credit if attempted but coverage couldn't be computed
-            score += 0.35 * 0.5
+            execution_coverage_score = 0.35 * 0.5  # Partial credit
         if successful_execution:
-            score += 0.25
-        score += error_recovery.persistence_score * 0.15
+            successful_execution_score = 0.25
+        error_recovery_score = error_recovery.persistence_score * 0.15
 
     elif domain == "corebench_hard":
         # - Read documentation/README (15%)
@@ -2139,32 +2191,46 @@ def _compute_methodology_score(
         # - Error recovery (10%)
         # - Penalty: no dep install on failure (-5%)
         if read_documentation:
-            score += 0.15
+            doc_read_score = 0.15
         if read_target_script:
-            score += 0.15
-        # Use execution_coverage for partial credit, i.e. running some scripts
+            script_read_score = 0.15
         if execution_coverage > 0:
-            score += 0.30 * execution_coverage
+            execution_coverage_score = 0.30 * execution_coverage
         elif attempted_execution:
-            # Partial credit if attempted but coverage couldn't be computed - i.e. "run file question"
-            score += 0.30 * 0.5
+            execution_coverage_score = 0.30 * 0.5  # Partial credit
         if successful_execution:
-            score += 0.30
-        score += error_recovery.persistence_score * 0.10
+            successful_execution_score = 0.30
+        error_recovery_score = error_recovery.persistence_score * 0.10
 
         # Penalty for not attempting dependency installation when execution failed
-        # Installing deps is a means, not a goal - only penalize if execution was
-        # attempted, it failed, AND agent didn't try to install deps to fix it
         if not successful_execution and not installed_dependencies and attempted_execution:
-            score -= 0.05
+            penalty = -0.05
 
-        # Penalty for reading pre-existing results (anti-pattern)
-        if violations:
-            score = min(score, 0.3)  # Cap at 0.3 if violations
+    # Compute raw total
+    raw_total = (doc_read_score + script_read_score + execution_coverage_score +
+                 successful_execution_score + error_recovery_score + penalty)
 
-        # show log of calculated components to get to final score
+    # Apply violation cap for corebench_hard
+    if domain == "corebench_hard" and violations:
+        if raw_total > 0.3:
+            violation_cap_applied = True
+            raw_total = 0.3
 
-    return min(1.0, max(0.0, score))
+    final_score = min(1.0, max(0.0, raw_total))
+
+    breakdown = MethodologyScoreBreakdown(
+        domain=domain,
+        doc_read_score=doc_read_score,
+        script_read_score=script_read_score,
+        execution_coverage_score=execution_coverage_score,
+        successful_execution_score=successful_execution_score,
+        error_recovery_score=error_recovery_score,
+        penalty=penalty,
+        violation_cap_applied=violation_cap_applied,
+        total=final_score,
+    )
+
+    return final_score, breakdown
 
 
 # =============================================================================

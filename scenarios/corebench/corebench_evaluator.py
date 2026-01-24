@@ -673,13 +673,19 @@ class CoreBenchEvaluator(GreenAgent):
         def _rel(abs_path: str) -> str:
             return os.path.relpath(abs_path, self._workspace_dir)
 
-        # MEDIUM/HARD: Remove results
+        # MEDIUM/HARD: Remove ALL results directories (including nested ones)
+        # This prevents agents from finding pre-existing results in folders like
+        # code_and_result-of-0-degree-our-repeated/results/
         if domain in ("corebench_medium", "corebench_hard"):
-            if os.path.isdir(results_dir):
-                logger.info(f"Removing results/ for {domain}")
-                shutil.rmtree(results_dir)
-                removed_results = True
-                deleted_files.append("environment/results/")
+            # Find all directories named "results" anywhere in the environment
+            for root, dirs, files in os.walk(env_dir):
+                if "results" in dirs:
+                    results_path = os.path.join(root, "results")
+                    rel_path = _rel(results_path)
+                    logger.info(f"Removing {rel_path}/ for {domain}")
+                    shutil.rmtree(results_path)
+                    removed_results = True
+                    deleted_files.append(f"{rel_path}/")
 
         # HARD: Remove REPRODUCING.md, environment/ and run scripts
         if domain == "corebench_hard":
@@ -1573,6 +1579,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # Log expected vs submitted for debugging (with question numbers)
         logger.info(f"\n   📋 ANSWER COMPARISON:")
         expected_keys = list(gt_result[0].keys()) if gt_result else []
+        submitted_keys = set(reported_result.keys()) if reported_result else set()
+        # Debug: show key mismatch if any
+        missing_keys = set(expected_keys) - submitted_keys
+        extra_keys = submitted_keys - set(expected_keys)
+        if missing_keys:
+            logger.debug(f"   ⚠️ Missing keys in submission: {list(missing_keys)[:3]}")
+        if extra_keys:
+            logger.debug(f"   ⚠️ Extra keys in submission: {list(extra_keys)[:3]}")
         for i, key in enumerate(expected_keys, 1):
             expected_val = gt_result[0].get(key, "<missing>")
             # Retrieve submitted question string
@@ -1585,6 +1599,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.info(f"   {match} {key_display}")
             logger.info(f"      Expected:  {exp_str}")
             logger.info(f"      Submitted: {sub_str}")
+            # Show debug info if values look same but marked wrong (compare full values, not truncated)
+            if match == "✗" and str(expected_val).lower().strip() == str(submitted_val).lower().strip():
+                logger.info(f"      ⚠️ Debug: looks same after normalize! exp_repr={repr(expected_val)[:80]}, sub_repr={repr(submitted_val)[:80]}")
 
         # Count command timeouts for task adherence context
         command_timeouts = sum(
@@ -1603,18 +1620,56 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             task_prompt=task_prompt,
             deleted_files=deleted_files,
         )
-        logger.info(f"   ✓ Methodology Score: {methodology_metrics.methodology_score:.2f}/1.0")
-        logger.info(f"   - Documentation Read: {'Yes' if methodology_metrics.read_documentation else 'No'}")
-        logger.info(f"   - Target Script Read: {'Yes' if methodology_metrics.read_target_script else 'No'}")
-        logger.info(f"   - Execution Attempted: {'Yes' if methodology_metrics.attempted_execution else 'No'} ({methodology_metrics.execution_attempts} attempts)")
-        logger.info(f"   - Successful Execution: {'Yes' if methodology_metrics.successful_execution else 'No'}")
         if methodology_metrics.expected_scripts:
-            logger.info(f"   - Expected Scripts: {methodology_metrics.expected_scripts}")
-            logger.info(f"   - Executed Scripts: {methodology_metrics.executed_scripts}")
-            logger.info(f"   - Execution Coverage: {methodology_metrics.execution_coverage:.1%}")
+            logger.info(f"   Expected: {methodology_metrics.expected_scripts}")
+            logger.info(f"   Executed: {methodology_metrics.executed_scripts or '(none)'}")
+        logger.info(f"   ✓ Methodology Score: {methodology_metrics.methodology_score:.2f}/1.0")
+        # Show score breakdown with max possible for each component
+        breakdown = methodology_metrics.score_breakdown
+        if breakdown:
+            # Define max weights per domain for display
+            if breakdown.domain == "corebench_hard":
+                max_doc, max_script, max_exec, max_success, max_recovery = 0.15, 0.15, 0.30, 0.30, 0.10
+            elif breakdown.domain == "corebench_medium":
+                max_doc, max_script, max_exec, max_success, max_recovery = 0.25, 0.0, 0.35, 0.25, 0.15
+            else:  # easy
+                max_doc, max_script, max_exec, max_success, max_recovery = 1.0, 0.0, 0.0, 0.0, 0.0
+
+            logger.info(f"   Score Breakdown:")
+            # Doc read
+            docs_list = ', '.join(methodology_metrics.docs_read) if methodology_metrics.docs_read else 'none read'
+            logger.info(f"     Doc Read:        {breakdown.doc_read_score:.2f}/{max_doc:.2f}  ({docs_list})")
+            # Script read (only for hard mode)
+            if breakdown.domain == "corebench_hard":
+                scripts_list = ', '.join(methodology_metrics.scripts_read) if methodology_metrics.scripts_read else 'none read'
+                logger.info(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
+            # Exec coverage
+            if methodology_metrics.execution_coverage > 0:
+                exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} coverage"
+            elif methodology_metrics.attempted_execution:
+                exec_cov_detail = "attempted but no match"
+            else:
+                exec_cov_detail = "not attempted"
+            logger.info(f"     Exec Coverage:   {breakdown.execution_coverage_score:.2f}/{max_exec:.2f}  ({exec_cov_detail})")
+            # Successful exec
+            success_detail = "exit_code=0" if methodology_metrics.successful_execution else "no successful run"
+            logger.info(f"     Successful Exec: {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
+            # Error recovery
+            err = methodology_metrics.error_recovery
+            if err.total_errors > 0:
+                error_types_str = ', '.join(f"{k}:{v}" for k, v in err.error_types.items()) if err.error_types else 'unclassified'
+                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  ({err.errors_recovered}/{err.total_errors} recovered - {error_types_str})")
+            else:
+                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  (no errors)")
+            # Penalties
+            if breakdown.penalty != 0:
+                logger.info(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")
+            if breakdown.violation_cap_applied:
+                logger.info(f"     ⚠️ Capped at 0.30 due to violations")
+            logger.info(f"     ─────────────────────")
+        # Show additional details
         if methodology_metrics.stdout_captured:
             logger.info(f"   - Stdout Captured: {methodology_metrics.stdout_total_bytes:,} bytes")
-        logger.info(f"   - Error Recovery Rate: {methodology_metrics.error_recovery.recovery_rate:.1%}")
         if methodology_metrics.violations:
             logger.info(f"   ⚠️ Violations: {', '.join(methodology_metrics.violations)}")
 
@@ -1627,6 +1682,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 "read_documentation": methodology_metrics.read_documentation,
                 "docs_read": methodology_metrics.docs_read,
                 "read_target_script": methodology_metrics.read_target_script,
+                "scripts_read": methodology_metrics.scripts_read,
                 "attempted_execution": methodology_metrics.attempted_execution,
                 "execution_attempts": methodology_metrics.execution_attempts,
                 "successful_execution": methodology_metrics.successful_execution,
@@ -1644,6 +1700,17 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     "persistence_score": methodology_metrics.error_recovery.persistence_score,
                 },
                 "violations": methodology_metrics.violations,
+                "score_breakdown": {
+                    "domain": methodology_metrics.score_breakdown.domain,
+                    "doc_read_score": methodology_metrics.score_breakdown.doc_read_score,
+                    "script_read_score": methodology_metrics.score_breakdown.script_read_score,
+                    "execution_coverage_score": methodology_metrics.score_breakdown.execution_coverage_score,
+                    "successful_execution_score": methodology_metrics.score_breakdown.successful_execution_score,
+                    "error_recovery_score": methodology_metrics.score_breakdown.error_recovery_score,
+                    "penalty": methodology_metrics.score_breakdown.penalty,
+                    "violation_cap_applied": methodology_metrics.score_breakdown.violation_cap_applied,
+                    "total": methodology_metrics.score_breakdown.total,
+                } if methodology_metrics.score_breakdown else None,
             })
 
         # TASK ADHERENCE
