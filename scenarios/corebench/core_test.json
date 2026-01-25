@@ -742,7 +742,7 @@
         "language": "R",
         "capsule_title": "Automated Text Classification of News Articles: A Practical Guide",
         "capsule_id": "capsule-9240688",
-        "task_prompt": "Run the bash script 'run.sh'.",
+        "task_prompt": "Run the R analysis scripts in order (01-overlap-analysis.R through 10-binning-analysis.R, then a01 through a07 appendix scripts) using Rscript.",
         "results": [
             {
                 "fig From figure 3, report the accuracy % of SML.": 71,
@@ -1097,7 +1097,7 @@
         "language": "R",
         "capsule_title": "From Faces to Politics: Vision-Language Models (Sometimes) Link Visual Demographic Characteristics to Ideological Labels",
         "capsule_id": "capsule-6791130",
-        "task_prompt": "Run 'run.sh'.",
+        "task_prompt": "Run the main R script '01_Main.R' using Rscript and copy outputs from 03_output/ to ../results/.",
         "results": [
             {
                 "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
@@ -1442,7 +1442,7 @@
         "language": "R",
         "capsule_title": "Preventing Sexual Violence -- A Behavioral Problem Without a Behaviorally-Informed Solution",
         "capsule_id": "capsule-3088870",
-        "task_prompt": "Run 'run.sh'.",
+        "task_prompt": "Render the 4 RMarkdown files in order (1-paper-descriptives.Rmd, 2-sv-meta.Rmd, 3-appendixes.Rmd, 4-exploratory-analyses.Rmd) using Rscript and rmarkdown::render().",
         "results": [
             {
                 "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
