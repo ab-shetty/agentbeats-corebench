@@ -975,6 +975,10 @@ class CoreBenchEvaluator(GreenAgent):
                     logger.info(f"   Accuracy: {task_evaluation.accuracy.accuracy:.1%} ({task_evaluation.accuracy.correct_answers}/{task_evaluation.accuracy.total_questions})")
                     logger.info(f"   Task Adherence: {task_evaluation.task_adherence.score:.2f}/1.0")
                     logger.info(f"   Steps: {task_evaluation.efficiency.steps_used}/{max_steps}")
+                    # Show violations prominently if any
+                    if task_evaluation.methodology_metrics and task_evaluation.methodology_metrics.violations:
+                        violations_str = ', '.join(task_evaluation.methodology_metrics.violations)
+                        logger.info(f"   ⚠️ Violations: {violations_str}")
 
                 except Exception as e:
                     logger.error(f"❌ Task {task_id} failed: {e}")
@@ -1341,6 +1345,20 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
             is_first_message = False
             steps_used += 1
+
+            # Extract and trace plan if present (purple agent piggybacks plan on tool call)
+            plan_match = re.search(r'<plan>\n?(.*?)\n?</plan>', response, re.DOTALL)
+            if plan_match:
+                if trace:
+                    trace.add({
+                        "type": "plan",
+                        "flow": "purple -> trace",
+                        "turn": turn,
+                        "content": plan_match.group(1).strip(),
+                    })
+                # Remove plan block so _parse_and_execute_tools only sees JSON
+                response = response.replace(plan_match.group(0), "").strip()
+
             try:
                 action, tool_result = await self._parse_and_execute_tools(response, use_mcp)
                 protocol_errors = 0
@@ -1420,7 +1438,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     output_lines = tool_result.split('\n')
                     if len(output_lines) > 5:
                         preview = '\n'.join(output_lines[:3])
-                        #logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
+                        logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
                     elif tool_result.strip():
                         logger.info(f"   Output: {tool_result[:200]}")
                         
@@ -1620,9 +1638,44 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             task_prompt=task_prompt,
             deleted_files=deleted_files,
         )
+        # Show script execution info
+        executed_list = methodology_metrics.executed_scripts or []
+        failed_list = methodology_metrics.attempted_failed_scripts or []
+        executed_basenames = {os.path.basename(s) for s in executed_list}
+        failed_basenames = {os.path.basename(s) for s in failed_list}
+
         if methodology_metrics.expected_scripts:
-            logger.info(f"   Expected: {methodology_metrics.expected_scripts}")
-            logger.info(f"   Executed: {methodology_metrics.executed_scripts or '(none)'}")
+            expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts}
+            logger.info(f"   Expected: {list(expected_basenames)}")
+
+            # What matched vs what didn't
+            matched_success = expected_basenames & executed_basenames
+            matched_failed = expected_basenames & failed_basenames
+            other_success = executed_basenames - expected_basenames
+            other_failed = failed_basenames - expected_basenames
+
+            if matched_success:
+                logger.info(f"   Executed: {list(matched_success)}")
+            elif matched_failed:
+                logger.info(f"   Executed: (none - expected script failed)")
+            else:
+                logger.info(f"   Executed: (none of expected)")
+
+            # Show what else ran
+            if other_success:
+                logger.info(f"   Also ran: {list(other_success)} (succeeded, not expected)")
+            if matched_failed:
+                logger.info(f"   Failed: {list(matched_failed)} (expected script)")
+            if other_failed:
+                logger.info(f"   Failed: {list(other_failed)} (not expected)")
+        else:
+            # Generic task - no specific scripts in prompt
+            if executed_list:
+                logger.info(f"   Executed: {list(executed_basenames)} (generic task)")
+            elif failed_list:
+                logger.info(f"   Attempted: {list(failed_basenames)} (failed - generic task)")
+            elif methodology_metrics.attempted_execution:
+                logger.info(f"   Executed: (attempted but failed - generic task)")
         logger.info(f"   ✓ Methodology Score: {methodology_metrics.methodology_score:.2f}/1.0")
         # Show score breakdown with max possible for each component
         breakdown = methodology_metrics.score_breakdown
@@ -1643,22 +1696,50 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             if breakdown.domain == "corebench_hard":
                 scripts_list = ', '.join(methodology_metrics.scripts_read) if methodology_metrics.scripts_read else 'none read'
                 logger.info(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
-            # Exec coverage
+            # Exec coverage - show which expected scripts were actually run
+            expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts} if methodology_metrics.expected_scripts else set()
+            executed_basenames = {os.path.basename(s) for s in (methodology_metrics.executed_scripts or [])}
+            failed_basenames = {os.path.basename(s) for s in (methodology_metrics.attempted_failed_scripts or [])}
+
             if methodology_metrics.execution_coverage > 0:
-                exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} coverage"
+                if not expected_basenames:
+                    exec_cov_detail = "successful exec (generic task)"
+                else:
+                    matched = expected_basenames & executed_basenames
+                    if matched:
+                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} - matched: {', '.join(sorted(matched))}"
+                    else:
+                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} coverage"
             elif methodology_metrics.attempted_execution:
-                exec_cov_detail = "attempted but no match"
+                if not expected_basenames:
+                    exec_cov_detail = "attempted but failed (generic task)"
+                else:
+                    matched_failed = expected_basenames & failed_basenames
+                    if matched_failed:
+                        exec_cov_detail = f"expected script failed ({', '.join(sorted(matched_failed))})"
+                    else:
+                        exec_cov_detail = "ran different script (not expected)"
             else:
                 exec_cov_detail = "not attempted"
             logger.info(f"     Exec Coverage:   {breakdown.execution_coverage_score:.2f}/{max_exec:.2f}  ({exec_cov_detail})")
-            # Successful exec
-            success_detail = "exit_code=0" if methodology_metrics.successful_execution else "no successful run"
+            # Successful exec - show what actually succeeded
+            if methodology_metrics.successful_execution:
+                executed_list = methodology_metrics.executed_scripts or []
+                if executed_list:
+                    # Show the script(s) that succeeded
+                    success_scripts = ', '.join(os.path.basename(s) for s in executed_list)
+                    success_detail = f"exit_code=0 ({success_scripts})"
+                else:
+                    success_detail = "exit_code=0"
+            else:
+                success_detail = "no successful run"
             logger.info(f"     Successful Exec: {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
             # Error recovery
             err = methodology_metrics.error_recovery
             if err.total_errors > 0:
                 error_types_str = ', '.join(f"{k}:{v}" for k, v in err.error_types.items()) if err.error_types else 'unclassified'
-                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  ({err.errors_recovered}/{err.total_errors} recovered - {error_types_str})")
+                recovery_pct = (err.errors_recovered / err.total_errors) * 100
+                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  ({err.errors_recovered}/{err.total_errors} = {recovery_pct:.0f}% - {error_types_str})")
             else:
                 logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  (no errors)")
             # Penalties

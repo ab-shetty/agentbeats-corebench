@@ -42,7 +42,7 @@ EFFICIENCY:
    - Protocol/format errors encountered
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Any, Callable, Optional
 import json
 import logging
@@ -218,6 +218,7 @@ class MethodologyMetrics:
     # Script coverage               - from task_prompt analysis
     expected_scripts: list[str]         # Scripts parsed from task_prompt that should be executed
     executed_scripts: list[str]         # Scripts the agent actually ran successfully
+    attempted_failed_scripts: list[str] # Scripts the agent attempted but failed (exit_code != 0)
     execution_coverage: float           #  Fraction of expected scripts that were run (0.0-1.0)
 
     # Stdout diagnostics            - for "ran code but output to stdout" cases)
@@ -544,8 +545,11 @@ def _normalize_submitted(submitted: dict) -> dict:
                 # But allows "$1.80 Trillion USD" (3/17=0.18) to be extracted
                 digit_count = sum(1 for c in value if c.isdigit() or c in '.,')
                 non_space_count = sum(1 for c in value if not c.isspace())
-                # Only convert if digits are >15% of content
-                if non_space_count > 0 and digit_count / non_space_count > 0.15:
+                value_lower = value.lower()
+                # Always extract if word multipliers present (million, billion, etc.)
+                has_multiplier = any(m in value_lower for m in ['million', 'billion', 'trillion', 'thousand'])
+                # Only convert if digits are >15% of content OR has word multiplier
+                if has_multiplier or (non_space_count > 0 and digit_count / non_space_count > 0.15):
                     submitted[key] = extracted
             # Otherwise keep as string (for actual string answers)
 
@@ -841,10 +845,9 @@ Task prompt: {task_prompt}
 ## Domain-Specific Success Criteria
 
 ### MEDIUM MODE (corebench_medium)
-**Gold Standard:** Read markdown instructions → Execute documented command (usually Docker) → Handle errors → Generate output
+**Gold Standard:** Read markdown instructions → Execute documented command → Handle errors → Generate output
 
 **Automatic Disqualifiers (cap score at 0.3):**
-- Never read markdown instructions
 - Read pre-existing results instead of executing
 - Never attempted documented command
 
@@ -852,32 +855,27 @@ Task prompt: {task_prompt}
 **Context:** In hard mode, the following are DELETED:
 - REPRODUCING.md (step-by-step reproduction instructions)
 - code/run.sh and code/run (entry point scripts)
-- environment/ nested directory
+- environment/Dockerfile
 - results/ directory
 
 **NOT deleted (available to agent):**
-- README.md files (project documentation - agent can use these!)
-- Dockerfile, requirements.txt, and other dependency files
+- README.md files
 - All source code files
 
 The agent must figure out how to run the code by:
+- Understanding the repository structure
 - Reading README.md for project context and setup instructions
 - Reading the target script to understand dependencies
-- Checking for Dockerfile, requirements.txt
 - Inferring execution method from the code itself
 
-**Gold Standard:** Analyze code/scripts → Identify dependencies → Set up environment → Execute target script → Debug errors → Generate output
+**Gold Standard:** Analyze code/scripts → Identify dependencies → Set up environment → Execute target script → Debug errors (if any) → Generate output
 
 **Automatic Disqualifiers (cap score at 0.3):**
 - Read pre-existing results instead of executing
-- Never attempted to run the target script
-- Made no effort to resolve dependency errors
-- Gave up without trying alternative approaches
+- Never attempted to reproduce the results by running code
 
 **NOT a disqualifier in hard mode:**
-- Not reading README.md IF the capsule doesn't have one (check capsule_context_debug.docs)
 - Using code analysis as a discovery method (reading script source to understand dependencies)
-- Not finding Dockerfile IF one doesn't exist for this capsule
 
 ### EASY MODE (corebench_easy)
 **Gold Standard:** List results/ directory → Read output files → Extract exact values → DO NOT execute code
@@ -1564,6 +1562,77 @@ def _is_dependency_install(cmd: str) -> bool:
     return any(pattern in cmd_lower for pattern in install_patterns)
 
 
+# Script file extensions for read detection
+_SCRIPT_EXTENSIONS = (".py", ".sh", ".r", ".R", ".Rmd", ".jl", ".m", ".ipynb")
+
+
+def _extract_script_reads_from_bash(cmd: str) -> list[str]:
+    """Extract script file paths from bash commands that read file contents.
+
+    Detects common file reading patterns:
+    - cat file.py
+    - head/tail file.R
+    - sed -n '...' file.Rmd
+    - less/more file.sh
+    - grep pattern file.py (when targeting specific file)
+
+    Returns:
+        List of script file paths that were read by the command.
+
+    2026-01-26: Added fix where agents reading scripts via bash commands 
+    (sed, cat, head) weren't credited for "read_target_script"
+    """
+    if not cmd:
+        return []
+
+    scripts_found: list[str] = []
+
+    # Split command by common separators (pipes, semicolons, &&, ||)
+    # We want to analyze each subcommand
+    import shlex
+
+    # Simple tokenization - split on whitespace but respect quotes
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        # If shlex fails (unbalanced quotes), fall back to simple split
+        tokens = cmd.split()
+
+    if not tokens:
+        return []
+
+    # Commands that read file contents
+    read_commands = {"cat", "head", "tail", "less", "more", "sed", "awk", "grep", "view", "bat"}
+
+    # Check if first token (or token after env vars) is a read command
+    cmd_name = tokens[0].split("/")[-1]  # Handle full paths like /usr/bin/cat
+
+    # Also check for common patterns like: sed -n '1,200p' file.R
+    for i, token in enumerate(tokens):
+        base_cmd = token.split("/")[-1]
+        if base_cmd in read_commands:
+            # Look for file arguments after the command
+            for j in range(i + 1, len(tokens)):
+                arg = tokens[j]
+                # Skip flags (start with -)
+                if arg.startswith("-"):
+                    continue
+                # Skip quoted patterns (for sed/awk/grep)
+                if arg.startswith("'") or arg.startswith('"'):
+                    continue
+                # Skip common grep/sed patterns
+                if "=" in arg or arg.startswith("s/") or arg.startswith("/"):
+                    continue
+                # Check if this looks like a script file
+                if arg.endswith(_SCRIPT_EXTENSIONS):
+                    # Normalize path (remove leading ./ if present)
+                    normalized = arg.lstrip("./")
+                    if normalized not in scripts_found:
+                        scripts_found.append(normalized)
+
+    return scripts_found
+
+
 def _classify_error(summary: str) -> str:
     """Classify an error type from tool result summary.
 
@@ -1642,6 +1711,26 @@ def _classify_error(summary: str) -> str:
         return "file_not_found"
     if "setwd" in summary_lower and "error" in summary_lower:
         return "working_directory_error"
+
+    # CLI/argument errors
+    if "unrecognized arguments" in summary_lower or "invalid argument" in summary_lower:
+        return "cli_argument_error"
+    if "usage:" in summary_lower and "error:" in summary_lower:
+        return "cli_argument_error"
+
+    # Tool/API validation errors (MCP tool parameter issues)
+    if "field required" in summary_lower or "validation error" in summary_lower:
+        return "tool_validation_error"
+    if "unknown command" in summary_lower or "valid commands:" in summary_lower:
+        return "tool_validation_error"
+    if "old_str and new_str are required" in summary_lower:
+        return "tool_validation_error"
+    if "not a regular file" in summary_lower:
+        return "tool_validation_error"
+
+    # System command not found (missing system dependencies like pandoc, latex, etc.)
+    if "command not found" in summary_lower or "not found in path" in summary_lower:
+        return "command_not_found"
 
     return "other"
 
@@ -1804,12 +1893,11 @@ def _parse_expected_scripts(task_prompt: str) -> list[str]:
 def _extract_executed_scripts(
     tool_calls: list[dict],
     tool_results: list[dict],
-) -> tuple[list[str], int, str]:
-    """Extract successfully executed script filenames and stdout from tool calls.
+) -> tuple[list[str], list[str], int, str]:
+    """Extract executed script filenames and stdout from tool calls.
 
-    Only counts executions that succeeded (exit_code=0).
-    Also captures stdout from successful script executions for diagnostics
-    (helps identify "ran code but output to stdout" cases).
+    Tracks both successful executions (exit_code=0) and attempted but failed scripts.
+    Also captures stdout from successful script executions for diagnostics.
 
     Uses turn-based matching (not array indices) for robustness.
 
@@ -1818,10 +1906,10 @@ def _extract_executed_scripts(
         tool_results: List of tool_result events from trace
 
     Returns:
-        Tuple of (executed_scripts, stdout_total_bytes, stdout_sample)
+        Tuple of (executed_scripts, attempted_failed_scripts, stdout_total_bytes, stdout_sample)
     """
     if not tool_calls:
-        return [], 0, ""
+        return [], [], 0, ""
 
     # Build results lookup by turn (robust matching)
     results_by_turn: dict[int, dict] = {}
@@ -1830,6 +1918,7 @@ def _extract_executed_scripts(
         results_by_turn[turn] = result
 
     executed = []
+    attempted_failed = []
     all_stdout_parts = []
     total_stdout_bytes = 0
 
@@ -1848,8 +1937,7 @@ def _extract_executed_scripts(
 
         # Check if execution succeeded
         exit_code = result.get("exit_code")
-        if exit_code is None or exit_code != 0:
-            continue  # Only count successful executions
+        is_success = exit_code == 0
 
         # Extract script names from the command
         scripts_in_cmd = []
@@ -1883,15 +1971,19 @@ def _extract_executed_scripts(
         rmd_exec = re.findall(r"render\(['\"]([^'\"]+\.Rmd)['\"]", cmd)
         scripts_in_cmd.extend(rmd_exec)
 
-        # If we found scripts in this command, capture stdout
+        # If we found scripts in this command, track them
         if scripts_in_cmd:
-            executed.extend(scripts_in_cmd)
-            stdout_text = str(result.get("summary", ""))
-            if stdout_text.strip():
-                all_stdout_parts.append(stdout_text)
-                total_stdout_bytes += len(stdout_text)
+            if is_success:
+                executed.extend(scripts_in_cmd)
+                stdout_text = str(result.get("summary", ""))
+                if stdout_text.strip():
+                    all_stdout_parts.append(stdout_text)
+                    total_stdout_bytes += len(stdout_text)
+            else:
+                # Track attempted but failed scripts
+                attempted_failed.extend(scripts_in_cmd)
 
-    # Deduplicate and get basenames
+    # Deduplicate and get basenames for successful executions
     seen = set()
     unique = []
     for script in executed:
@@ -1899,6 +1991,16 @@ def _extract_executed_scripts(
         if basename not in seen:
             seen.add(basename)
             unique.append(basename)
+
+    # Deduplicate attempted_failed (exclude those that eventually succeeded)
+    failed_seen = set()
+    unique_failed = []
+    for script in attempted_failed:
+        basename = os.path.basename(script)
+        # Only include if not already in successful executions
+        if basename not in seen and basename not in failed_seen:
+            failed_seen.add(basename)
+            unique_failed.append(basename)
 
     # Build stdout sample (truncate to last N bytes if too large)
     # decide whether to keep these or not, are not used for anything right now
@@ -1911,7 +2013,7 @@ def _extract_executed_scripts(
     else:
         stdout_sample = combined_stdout
 
-    return unique, total_stdout_bytes, stdout_sample
+    return unique, unique_failed, total_stdout_bytes, stdout_sample
 
 
 def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: list[str], successful_execution: bool) -> float:
@@ -2011,13 +2113,15 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
             
             # Check for documentation reads
             if _is_documentation(file_path) and not read_failed:
-                docs_read.append(file_path)
+                if file_path not in docs_read:  # Deduplicate
+                    docs_read.append(file_path)
                 read_documentation = True
 
             # Check for reading target script (code files)
             # Includes Python, Shell, R, R Markdown, Julia, MATLAB, Jupyter notebooks
             if file_path.endswith((".py", ".sh", ".r", ".R", ".Rmd", ".jl", ".m", ".ipynb")) and not read_failed:
-                scripts_read.append(file_path)
+                if file_path not in scripts_read:  # Deduplicate
+                    scripts_read.append(file_path)
                 read_target_script = True
 
             # Track results/ reads for later violation analysis
@@ -2052,6 +2156,15 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
             # Check for dependency installation
             if _is_dependency_install(cmd):
                 installed_dependencies = True
+
+            # Check for script reads via bash commands (sed, cat, head, etc.)
+            # This fixes the gap where agents reading scripts via bash weren't credited
+            if exit_code == 0:  # Only credit successful reads
+                bash_script_reads = _extract_script_reads_from_bash(cmd)
+                for script_path in bash_script_reads:
+                    if script_path not in scripts_read:
+                        scripts_read.append(script_path)
+                    read_target_script = True
 
     # Now determine violations: only flag results reads that happened BEFORE successful execution
     if domain == "corebench_hard":
@@ -2090,7 +2203,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
             logger.info("Filtered out %d expected scripts that were deleted by difficulty filter.", filtered_out)
             pass
 
-    executed_scripts, stdout_total_bytes, stdout_sample = _extract_executed_scripts(
+    executed_scripts, attempted_failed_scripts, stdout_total_bytes, stdout_sample = _extract_executed_scripts(
         tool_calls, tool_results
     )
     execution_coverage = _compute_execution_coverage(expected_scripts, executed_scripts, successful_execution)
@@ -2118,6 +2231,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
         successful_execution=successful_execution,
         expected_scripts=expected_scripts,
         executed_scripts=executed_scripts,
+        attempted_failed_scripts=attempted_failed_scripts,
         execution_coverage=execution_coverage,
         stdout_captured=stdout_captured,
         stdout_total_bytes=stdout_total_bytes,
@@ -2268,6 +2382,9 @@ class AggregateMetrics:
 
     task_results: dict[str, dict]
 
+    # Aggregate error diagnostics (for identifying systemic issues)
+    error_type_distribution: dict[str, int] = field(default_factory=dict)  # Count of each error type across all tasks
+
 
 def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     """Aggregate metrics across multiple task evaluations."""
@@ -2289,6 +2406,7 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
             mean_tool_calls=0.0,
             mean_time=0.0,
             task_results={},
+            error_type_distribution={},
         )
 
     num_tasks = len(evaluations)
@@ -2322,16 +2440,24 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     mean_tools = np.mean([e.efficiency.tool_calls for e in evaluations])
     mean_time = np.mean([e.efficiency.time_seconds for e in evaluations])
 
-    # Per-task summary
+    # Per-task summary (now includes time_seconds for per-task timing)
     task_results = {
         e.task_id: {
             "success": bool(e.success),
             "accuracy": float(e.accuracy.accuracy),
             "adherence": float(e.task_adherence.score),
             "methodology_score": float(e.methodology_metrics.methodology_score) if e.methodology_metrics else None,
+            "time_seconds": float(e.efficiency.time_seconds),
         }
         for e in evaluations
     }
+
+    # Aggregate error type distribution across all tasks
+    error_type_distribution: dict[str, int] = {}
+    for e in methodology_evals:
+        if e.methodology_metrics and e.methodology_metrics.error_recovery:
+            for error_type, count in e.methodology_metrics.error_recovery.error_types.items():
+                error_type_distribution[error_type] = error_type_distribution.get(error_type, 0) + count
 
     return AggregateMetrics(
         num_tasks=num_tasks,
@@ -2350,4 +2476,5 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
         mean_tool_calls=float(mean_tools),
         mean_time=float(mean_time),
         task_results=task_results,
+        error_type_distribution=error_type_distribution,
     )
