@@ -81,6 +81,12 @@ from scenarios.corebench.metrics.metrics import (
 
 from model_prices import MODEL_PRICES_DICT
 
+# Optional Phoenix Cloud exporter (set PHOENIX_API_KEY to enable)
+try:
+    from scenarios.corebench.phoenix_exporter import export_trace as phoenix_export_trace
+except ImportError:
+    phoenix_export_trace = None  # Phoenix exporter not available
+
 # Setup logging - will be initialized in main()
 logger = logging.getLogger("evaluator")
 
@@ -1699,6 +1705,18 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 logger.error(f"Error cleaning up MCP client: {e}")
             self._mcp_client = None
         
+        # Export trace to Phoenix Cloud (if enabled) before closing
+        if trace and phoenix_export_trace:
+            try:
+                phoenix_export_trace(
+                    events=trace.get_events(),
+                    task_id=task_id,
+                    run_id=run_id,
+                    domain=domain,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to export trace to Phoenix: {e}")
+
         # Close trace file and optionally delete it
         if trace:
             trace_path = trace.jsonl_path
