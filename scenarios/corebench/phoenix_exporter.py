@@ -16,8 +16,7 @@ Docs: https://arize.com/docs/ax/observe/tracing/setup/manual-instrumentation
 import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("phoenix_exporter")
 
@@ -88,6 +87,10 @@ def export_trace(
     """
     Export trace events to Arize AX.
 
+    Creates multiple traces grouped into one session:
+    - One trace per tool call (with input/output)
+    - One summary trace with evaluation metrics
+
     Args:
         events: List of trace events from ExecutionTraceWriter.get_events()
         task_id: The capsule/task ID (e.g., "capsule-2804717")
@@ -103,9 +106,9 @@ def export_trace(
         return False
 
     try:
-        from opentelemetry.trace import Status, StatusCode
-        from opentelemetry import context as otel_context
-        from opentelemetry.trace import set_span_in_context
+        from opentelemetry.trace import Status, StatusCode, get_current_span
+        from openinference.instrumentation import using_session
+        from openinference.semconv.trace import SpanAttributes
 
         # Extract metadata from events
         task_start = next((e for e in events if e.get("type") == "task_start"), {})
@@ -115,235 +118,229 @@ def export_trace(
         llm_judge_input = next((e for e in events if e.get("type") == "llm_judge_input"), {})
         eval_data = evaluation.get("evaluation", {})
 
-        # Create parent span for the entire task
-        with _tracer.start_as_current_span(
-            f"task:{task_id}",
-            attributes={
-                "corebench.run_id": run_id,
-                "corebench.task_id": task_id,
-                "corebench.domain": domain or task_start.get("domain", ""),
-                "corebench.host": task_start.get("host", ""),
-                "corebench.questions": json.dumps(task_start.get("questions", [])),
-            }
-        ) as parent_span:
+        # Session ID groups all traces for this task together
+        session_id = f"{task_id}_{run_id}"
 
-            # Track tool calls for pairing with results
-            # Key: turn number, Value: (span, arguments_dict)
-            turn_to_tool: dict[int, tuple[Any, dict]] = {}
+        # All traces within this context share the same session
+        with using_session(session_id):
 
-            for event in events:
-                etype = event.get("type")
-                turn = event.get("turn", 0)
+            # Pair tool_call and tool_result events by turn
+            tool_calls = {e["turn"]: e for e in events if e.get("type") == "tool_call"}
+            tool_results = {e["turn"]: e for e in events if e.get("type") == "tool_result"}
 
-                # Skip agent_prompt and agent_response - tool spans already capture
-                # the conversation flow via input.value (args) and output.value (results)
+            # Track the first span_id for evaluation logging
+            first_span_id = None
 
-                if etype == "tool_call":
-                    tool_name = event.get("tool", "unknown")
-                    arguments = event.get("arguments", {})
-                    arguments_str = json.dumps(arguments, indent=2)
+            # Create one trace per tool call
+            for turn in sorted(tool_calls.keys()):
+                call = tool_calls[turn]
+                result = tool_results.get(turn, {})
 
-                    # Create a child span for the tool call, linked to parent
-                    parent_ctx = set_span_in_context(parent_span)
-                    tool_span = _tracer.start_span(
-                        f"tool:{tool_name}",
-                        context=parent_ctx,
-                        attributes={
-                            "tool.name": tool_name,
-                            "turn": turn,
-                            # OpenInference semantic convention for input
-                            "input.value": _truncate(arguments_str),
-                        }
-                    )
-                    turn_to_tool[turn] = (tool_span, arguments)
+                tool_name = call.get("tool", "unknown")
+                arguments = call.get("arguments", {})
+                arguments_str = json.dumps(arguments, indent=2)
 
-                elif etype == "tool_result":
-                    tool_name = event.get("tool", "unknown")
-                    # Find and close the matching tool call span
-                    tool_data = turn_to_tool.pop(turn, None)
-                    if tool_data:
-                        tool_span, _ = tool_data
-                        exit_code = event.get("exit_code")
-                        timed_out = event.get("timed_out", False)
-                        summary = event.get("summary", "")
+                exit_code = result.get("exit_code")
+                timed_out = result.get("timed_out", False)
+                summary = result.get("summary", "")
 
-                        tool_span.set_attribute("tool.exit_code", exit_code if exit_code is not None else -1)
-                        tool_span.set_attribute("tool.timed_out", timed_out)
-                        # OpenInference semantic convention for output
-                        tool_span.set_attribute("output.value", _truncate(summary))
+                # Each tool call is a ROOT span = its own trace
+                with _tracer.start_as_current_span(
+                    f"[{turn}] {tool_name}",
+                    attributes={
+                        "tool.name": tool_name,
+                        "turn": turn,
+                        "corebench.task_id": task_id,
+                        "corebench.run_id": run_id,
+                        "input.value": _truncate(arguments_str),
+                        "output.value": _truncate(summary),
+                        "tool.exit_code": exit_code if exit_code is not None else -1,
+                        "tool.timed_out": timed_out,
+                    }
+                ) as span:
+                    # Explicitly set session_id on span
+                    span.set_attribute(SpanAttributes.SESSION_ID, session_id)
 
-                        if event.get("hint"):
-                            tool_span.set_attribute("tool.hint", event["hint"])
+                    # Capture first span_id for evaluation logging
+                    if first_span_id is None:
+                        span_context = span.get_span_context()
+                        first_span_id = format(span_context.span_id, '016x')
 
-                        # Set status based on result
-                        if timed_out:
-                            tool_span.set_status(Status(StatusCode.ERROR, "Command timed out"))
-                        elif exit_code is not None and exit_code != 0:
-                            tool_span.set_status(Status(StatusCode.ERROR, f"Exit code: {exit_code}"))
-                        else:
-                            tool_span.set_status(Status(StatusCode.OK))
+                    if result.get("hint"):
+                        span.set_attribute("tool.hint", result["hint"])
 
-                        tool_span.end()
+                    if timed_out:
+                        span.set_status(Status(StatusCode.ERROR, "Command timed out"))
+                    elif exit_code is not None and exit_code != 0:
+                        span.set_status(Status(StatusCode.ERROR, f"Exit code: {exit_code}"))
+                    else:
+                        span.set_status(Status(StatusCode.OK))
 
-                elif etype == "protocol_error":
-                    parent_span.add_event(
-                        "protocol_error",
-                        attributes={
-                            "turn": turn,
-                            "error_type": event.get("error_type", "unknown"),
-                            "error_message": _truncate(event.get("error_message", "")),
-                        }
-                    )
+            # Create a summary trace with task metadata and evaluation
+            with _tracer.start_as_current_span(
+                f"[summary] {task_id}",
+                attributes={
+                    "corebench.run_id": run_id,
+                    "corebench.task_id": task_id,
+                    "corebench.domain": domain or task_start.get("domain", ""),
+                    "corebench.host": task_start.get("host", ""),
+                    "corebench.questions": json.dumps(task_start.get("questions", [])),
+                }
+            ) as summary_span:
+                # Explicitly set session_id on span
+                summary_span.set_attribute(SpanAttributes.SESSION_ID, session_id)
 
-            # Close any unclosed tool spans
-            for turn, (span, _) in turn_to_tool.items():
-                span.set_status(Status(StatusCode.ERROR, "Tool call not completed"))
-                span.end()
+                # Final answer
+                if final_answer:
+                    content = final_answer.get("content", {})
+                    metadata = final_answer.get("metadata", {})
+                    content_str = json.dumps(content, indent=2) if isinstance(content, dict) else str(content)
 
-            # Add final answer to parent span
-            if final_answer:
-                content = final_answer.get("content", {})
-                metadata = final_answer.get("metadata", {})
-                content_str = json.dumps(content, indent=2) if isinstance(content, dict) else str(content)
+                    summary_span.set_attribute("final_answer.content", _truncate(content_str))
+                    summary_span.set_attribute("final_answer.turn", final_answer.get("turn", 0))
 
-                parent_span.set_attribute("final_answer.content", _truncate(content_str))
-                parent_span.set_attribute("final_answer.turn", final_answer.get("turn", 0))
+                    if metadata:
+                        summary_span.set_attribute("final_answer.model", metadata.get("model", ""))
+                        summary_span.set_attribute("final_answer.input_tokens", metadata.get("input_tokens", 0))
+                        summary_span.set_attribute("final_answer.output_tokens", metadata.get("output_tokens", 0))
 
-                if metadata:
-                    parent_span.set_attribute("final_answer.model", metadata.get("model", ""))
-                    parent_span.set_attribute("final_answer.input_tokens", metadata.get("input_tokens", 0))
-                    parent_span.set_attribute("final_answer.output_tokens", metadata.get("output_tokens", 0))
+                # LLM Judge Output
+                if llm_judge_output:
+                    parsed = llm_judge_output.get("parsed", {})
 
-            # === LLM JUDGE OUTPUT (task_adherence evaluation) ===
-            if llm_judge_output:
-                parsed = llm_judge_output.get("parsed", {})
+                    summary_span.set_attribute("judge.name", llm_judge_output.get("judge", ""))
+                    summary_span.set_attribute("judge.model", llm_judge_output.get("model", ""))
+                    summary_span.set_attribute("judge.domain", llm_judge_output.get("domain", ""))
+                    summary_span.set_attribute("judge.score", parsed.get("score", 0))
+                    summary_span.set_attribute("judge.followed_instructions", parsed.get("followed_instructions", False))
+                    summary_span.set_attribute("judge.navigation_quality", parsed.get("navigation_quality", ""))
+                    summary_span.set_attribute("judge.reasoning", _truncate(parsed.get("reasoning", "")))
 
-                # Judge metadata
-                parent_span.set_attribute("judge.name", llm_judge_output.get("judge", ""))
-                parent_span.set_attribute("judge.model", llm_judge_output.get("model", ""))
-                parent_span.set_attribute("judge.domain", llm_judge_output.get("domain", ""))
+                    if parsed.get("component_scores"):
+                        summary_span.set_attribute("judge.component_scores", json.dumps(parsed["component_scores"]))
+                    if parsed.get("strengths"):
+                        summary_span.set_attribute("judge.strengths", json.dumps(parsed["strengths"]))
+                    if parsed.get("weaknesses"):
+                        summary_span.set_attribute("judge.weaknesses", json.dumps(parsed["weaknesses"]))
+                    if parsed.get("penalties_applied"):
+                        summary_span.set_attribute("judge.penalties_applied", json.dumps(parsed["penalties_applied"]))
 
-                # Parsed scores and assessment
-                parent_span.set_attribute("judge.score", parsed.get("score", 0))
-                parent_span.set_attribute("judge.followed_instructions", parsed.get("followed_instructions", False))
-                parent_span.set_attribute("judge.navigation_quality", parsed.get("navigation_quality", ""))
-                parent_span.set_attribute("judge.reasoning", _truncate(parsed.get("reasoning", "")))
+                    summary_span.set_attribute("judge.raw_output", _truncate(llm_judge_output.get("raw", "")))
 
-                # Component scores
-                component_scores = parsed.get("component_scores", {})
-                if component_scores:
-                    parent_span.set_attribute("judge.component_scores", json.dumps(component_scores))
+                # LLM Judge Input
+                if llm_judge_input:
+                    summary_span.set_attribute("judge_input.task_prompt", _truncate(llm_judge_input.get("task_prompt", "")))
+                    summary_span.set_attribute("judge_input.steps_used", llm_judge_input.get("steps_used", 0))
+                    summary_span.set_attribute("judge_input.tool_calls_count", llm_judge_input.get("tool_calls_count", 0))
+                    summary_span.set_attribute("judge_input.protocol_errors", llm_judge_input.get("protocol_errors", 0))
+                    summary_span.set_attribute("judge_input.command_timeouts", llm_judge_input.get("command_timeouts", 0))
+                    summary_span.set_attribute("judge_input.has_answer", llm_judge_input.get("has_answer", False))
+                    summary_span.set_attribute("judge_input.answer_summary", llm_judge_input.get("answer_summary", ""))
+                    summary_span.set_attribute("judge_input.action_summary", _truncate(llm_judge_input.get("action_summary", "")))
 
-                # Strengths and weaknesses
-                strengths = parsed.get("strengths", [])
-                if strengths:
-                    parent_span.set_attribute("judge.strengths", json.dumps(strengths))
+                # Full Evaluation Metrics
+                if eval_data:
+                    summary_span.set_attribute("eval.task_id", eval_data.get("task_id", ""))
+                    summary_span.set_attribute("eval.domain", eval_data.get("domain", ""))
+                    summary_span.set_attribute("eval.success", eval_data.get("success", False))
 
-                weaknesses = parsed.get("weaknesses", [])
-                if weaknesses:
-                    parent_span.set_attribute("judge.weaknesses", json.dumps(weaknesses))
+                    # Accuracy
+                    accuracy = eval_data.get("accuracy", {})
+                    summary_span.set_attribute("eval.accuracy.total_questions", accuracy.get("total_questions", 0))
+                    summary_span.set_attribute("eval.accuracy.correct_answers", accuracy.get("correct_answers", 0))
+                    summary_span.set_attribute("eval.accuracy.accuracy", accuracy.get("accuracy", 0))
+                    summary_span.set_attribute("eval.accuracy.total_written", accuracy.get("total_written", 0))
+                    summary_span.set_attribute("eval.accuracy.correct_written", accuracy.get("correct_written", 0))
+                    summary_span.set_attribute("eval.accuracy.written_accuracy", accuracy.get("written_accuracy", 0))
+                    summary_span.set_attribute("eval.accuracy.total_vision", accuracy.get("total_vision", 0))
+                    summary_span.set_attribute("eval.accuracy.correct_vision", accuracy.get("correct_vision", 0))
+                    summary_span.set_attribute("eval.accuracy.vision_accuracy", accuracy.get("vision_accuracy", 0))
 
-                penalties = parsed.get("penalties_applied", [])
-                if penalties:
-                    parent_span.set_attribute("judge.penalties_applied", json.dumps(penalties))
+                    if accuracy.get("question_results"):
+                        summary_span.set_attribute("eval.accuracy.question_results", _truncate(json.dumps(accuracy["question_results"], indent=2)))
+                    if accuracy.get("missing_questions"):
+                        summary_span.set_attribute("eval.accuracy.missing_questions", json.dumps(accuracy["missing_questions"]))
 
-                # Raw judge output for reference
-                parent_span.set_attribute("judge.raw_output", _truncate(llm_judge_output.get("raw", "")))
+                    # Reproducibility
+                    repro = eval_data.get("reproducibility", {})
+                    summary_span.set_attribute("eval.reproducibility.success", repro.get("success", False))
+                    summary_span.set_attribute("eval.reproducibility.results_dir_exists", repro.get("results_dir_exists", False))
+                    summary_span.set_attribute("eval.reproducibility.num_output_files", repro.get("num_output_files", 0))
+                    summary_span.set_attribute("eval.reproducibility.total_output_bytes", repro.get("total_output_bytes", 0))
+                    summary_span.set_attribute("eval.reproducibility.reason", repro.get("reason", ""))
 
-            # === LLM JUDGE INPUT (context for the judge) ===
-            if llm_judge_input:
-                parent_span.set_attribute("judge_input.task_prompt", _truncate(llm_judge_input.get("task_prompt", "")))
-                parent_span.set_attribute("judge_input.steps_used", llm_judge_input.get("steps_used", 0))
-                parent_span.set_attribute("judge_input.tool_calls_count", llm_judge_input.get("tool_calls_count", 0))
-                parent_span.set_attribute("judge_input.protocol_errors", llm_judge_input.get("protocol_errors", 0))
-                parent_span.set_attribute("judge_input.command_timeouts", llm_judge_input.get("command_timeouts", 0))
-                parent_span.set_attribute("judge_input.has_answer", llm_judge_input.get("has_answer", False))
-                parent_span.set_attribute("judge_input.answer_summary", llm_judge_input.get("answer_summary", ""))
-                parent_span.set_attribute("judge_input.action_summary", _truncate(llm_judge_input.get("action_summary", "")))
+                    if repro.get("output_files"):
+                        summary_span.set_attribute("eval.reproducibility.output_files", json.dumps(repro["output_files"]))
 
-            # === FULL EVALUATION METRICS ===
-            if eval_data:
-                # Top-level
-                parent_span.set_attribute("eval.task_id", eval_data.get("task_id", ""))
-                parent_span.set_attribute("eval.domain", eval_data.get("domain", ""))
-                parent_span.set_attribute("eval.success", eval_data.get("success", False))
+                    # Adherence
+                    adherence = eval_data.get("task_adherence", {})
+                    summary_span.set_attribute("eval.adherence.score", adherence.get("score", 0))
+                    summary_span.set_attribute("eval.adherence.followed_instructions", adherence.get("followed_instructions", False))
+                    summary_span.set_attribute("eval.adherence.navigation_quality", adherence.get("navigation_quality", ""))
+                    summary_span.set_attribute("eval.adherence.reasoning", _truncate(adherence.get("reasoning", "")))
+                    summary_span.set_attribute("eval.adherence.status", adherence.get("status", ""))
 
-                # Accuracy metrics
-                accuracy = eval_data.get("accuracy", {})
-                parent_span.set_attribute("eval.accuracy.total_questions", accuracy.get("total_questions", 0))
-                parent_span.set_attribute("eval.accuracy.correct_answers", accuracy.get("correct_answers", 0))
-                parent_span.set_attribute("eval.accuracy.accuracy", accuracy.get("accuracy", 0))
-                parent_span.set_attribute("eval.accuracy.total_written", accuracy.get("total_written", 0))
-                parent_span.set_attribute("eval.accuracy.correct_written", accuracy.get("correct_written", 0))
-                parent_span.set_attribute("eval.accuracy.written_accuracy", accuracy.get("written_accuracy", 0))
-                parent_span.set_attribute("eval.accuracy.total_vision", accuracy.get("total_vision", 0))
-                parent_span.set_attribute("eval.accuracy.correct_vision", accuracy.get("correct_vision", 0))
-                parent_span.set_attribute("eval.accuracy.vision_accuracy", accuracy.get("vision_accuracy", 0))
+                    if adherence.get("strengths"):
+                        summary_span.set_attribute("eval.adherence.strengths", json.dumps(adherence["strengths"]))
+                    if adherence.get("weaknesses"):
+                        summary_span.set_attribute("eval.adherence.weaknesses", json.dumps(adherence["weaknesses"]))
+                    if adherence.get("error_message"):
+                        summary_span.set_attribute("eval.adherence.error_message", adherence["error_message"])
 
-                # Question results - detailed breakdown
-                question_results = accuracy.get("question_results", [])
-                if question_results:
-                    parent_span.set_attribute("eval.accuracy.question_results", _truncate(json.dumps(question_results, indent=2)))
+                    # Efficiency
+                    efficiency = eval_data.get("efficiency", {})
+                    summary_span.set_attribute("eval.efficiency.steps_used", efficiency.get("steps_used", 0))
+                    summary_span.set_attribute("eval.efficiency.max_steps", efficiency.get("max_steps", 0))
+                    summary_span.set_attribute("eval.efficiency.tool_calls", efficiency.get("tool_calls", 0))
+                    summary_span.set_attribute("eval.efficiency.time_seconds", efficiency.get("time_seconds", 0))
+                    summary_span.set_attribute("eval.efficiency.protocol_errors", efficiency.get("protocol_errors", 0))
+                    summary_span.set_attribute("eval.efficiency.command_timeouts", efficiency.get("command_timeouts", 0))
 
-                missing_questions = accuracy.get("missing_questions", [])
-                if missing_questions:
-                    parent_span.set_attribute("eval.accuracy.missing_questions", json.dumps(missing_questions))
+                    if eval_data.get("task_cost") is not None:
+                        summary_span.set_attribute("eval.task_cost", eval_data["task_cost"])
 
-                # Reproducibility metrics
-                repro = eval_data.get("reproducibility", {})
-                parent_span.set_attribute("eval.reproducibility.success", repro.get("success", False))
-                parent_span.set_attribute("eval.reproducibility.results_dir_exists", repro.get("results_dir_exists", False))
-                parent_span.set_attribute("eval.reproducibility.num_output_files", repro.get("num_output_files", 0))
-                parent_span.set_attribute("eval.reproducibility.total_output_bytes", repro.get("total_output_bytes", 0))
-                parent_span.set_attribute("eval.reproducibility.reason", repro.get("reason", ""))
-
-                output_files = repro.get("output_files", [])
-                if output_files:
-                    parent_span.set_attribute("eval.reproducibility.output_files", json.dumps(output_files))
-
-                # Task adherence metrics (from judge)
-                adherence = eval_data.get("task_adherence", {})
-                parent_span.set_attribute("eval.adherence.score", adherence.get("score", 0))
-                parent_span.set_attribute("eval.adherence.followed_instructions", adherence.get("followed_instructions", False))
-                parent_span.set_attribute("eval.adherence.navigation_quality", adherence.get("navigation_quality", ""))
-                parent_span.set_attribute("eval.adherence.reasoning", _truncate(adherence.get("reasoning", "")))
-                parent_span.set_attribute("eval.adherence.status", adherence.get("status", ""))
-
-                adherence_strengths = adherence.get("strengths", [])
-                if adherence_strengths:
-                    parent_span.set_attribute("eval.adherence.strengths", json.dumps(adherence_strengths))
-
-                adherence_weaknesses = adherence.get("weaknesses", [])
-                if adherence_weaknesses:
-                    parent_span.set_attribute("eval.adherence.weaknesses", json.dumps(adherence_weaknesses))
-
-                if adherence.get("error_message"):
-                    parent_span.set_attribute("eval.adherence.error_message", adherence["error_message"])
-
-                # Efficiency metrics
-                efficiency = eval_data.get("efficiency", {})
-                parent_span.set_attribute("eval.efficiency.steps_used", efficiency.get("steps_used", 0))
-                parent_span.set_attribute("eval.efficiency.max_steps", efficiency.get("max_steps", 0))
-                parent_span.set_attribute("eval.efficiency.tool_calls", efficiency.get("tool_calls", 0))
-                parent_span.set_attribute("eval.efficiency.time_seconds", efficiency.get("time_seconds", 0))
-                parent_span.set_attribute("eval.efficiency.protocol_errors", efficiency.get("protocol_errors", 0))
-                parent_span.set_attribute("eval.efficiency.command_timeouts", efficiency.get("command_timeouts", 0))
-
-                # Cost
-                if eval_data.get("task_cost") is not None:
-                    parent_span.set_attribute("eval.task_cost", eval_data["task_cost"])
-
-                # Set overall status
-                if eval_data.get("success"):
-                    parent_span.set_status(Status(StatusCode.OK))
-                else:
-                    parent_span.set_status(Status(StatusCode.ERROR, "Task failed"))
+                    # Set overall status
+                    if eval_data.get("success"):
+                        summary_span.set_status(Status(StatusCode.OK))
+                    else:
+                        summary_span.set_status(Status(StatusCode.ERROR, "Task failed"))
 
         # Force flush to ensure spans are sent before returning
         if _tracer_provider:
             _tracer_provider.force_flush(timeout_millis=10000)
 
-        logger.info(f"Exported trace for {task_id} to Arize AX")
+        # Log session-level evaluations if we have eval data and a span_id
+        if eval_data and first_span_id:
+            try:
+                import pandas as pd
+                from arize.pandas.logger import Client
+
+                adherence = eval_data.get("task_adherence", {})
+                accuracy = eval_data.get("accuracy", {})
+
+                # Create evaluation DataFrame
+                eval_df = pd.DataFrame([{
+                    "context.span_id": first_span_id,
+                    # Adherence score
+                    "eval.adherence.score": adherence.get("score", 0),
+                    "eval.adherence.label": "pass" if adherence.get("followed_instructions", False) else "fail",
+                    "eval.adherence.explanation": adherence.get("reasoning", "")[:500],
+                    # Accuracy score
+                    "eval.accuracy.score": accuracy.get("accuracy", 0),
+                    "eval.accuracy.label": "pass" if eval_data.get("success", False) else "fail",
+                    "eval.accuracy.explanation": f"{accuracy.get('correct_answers', 0)}/{accuracy.get('total_questions', 0)} correct",
+                }])
+
+                # Log evaluations to Arize
+                arize_client = Client(space_id=ARIZE_SPACE_ID, api_key=ARIZE_API_KEY)
+                arize_client.log_evaluations_sync(eval_df, ARIZE_PROJECT)
+                logger.debug(f"Logged evaluations for session {session_id}")
+
+            except Exception as e:
+                logger.warning(f"Failed to log evaluations: {e}")
+
+        num_tool_traces = len(tool_calls)
+        logger.info(f"Exported {num_tool_traces + 1} traces for {task_id} to Arize AX (session: {session_id})")
         return True
 
     except Exception as e:
