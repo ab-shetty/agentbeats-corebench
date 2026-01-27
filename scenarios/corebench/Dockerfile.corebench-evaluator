@@ -1,4 +1,44 @@
-FROM ghcr.io/astral-sh/uv:python3.13-trixie
+FROM ghcr.io/astral-sh/uv:python3.12-trixie
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    r-base \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libzmq3-dev \
+    libsodium-dev \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    libudunits2-dev \
+    libsqlite3-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libfontconfig1-dev \
+    libfreetype6-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libicu-dev \
+    libmagick++-dev \
+    libcairo2-dev \
+    libxt-dev \
+    libpng-dev \
+    libtiff-dev \
+    libjpeg-dev \
+    default-jdk \
+    libgmp-dev \
+    libmpfr-dev \
+    libglpk-dev \
+    libnlopt-dev \
+    libgsl-dev \
+    liblapack-dev \
+    libblas-dev \
+    libhdf5-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    liblzma-dev \
+    pandoc \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN adduser agentbeats
 USER agentbeats
