@@ -1443,6 +1443,34 @@
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.5471833.v2"
-    }
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python", 
+        "capsule_title": "Deep learning-enabled accurate assessment of gait impairments in Parkinson's disease using smartphone videos",
+        "capsule_id": "capsule-0152700",
+        "task_prompt": "Run the corresponding models and report on the generated output.",
+        "results": [
+            {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            },
+        {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            }, 
+        {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            },
+            
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.7700825.v1"
+    },
+    
+
 
 ]
