@@ -326,7 +326,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 truncated = stripped[:120] + ('...' if len(stripped) > 120 else '')
                 summary_lines.append(truncated)
 
-        logger.info(f"[PLAN] Generated ({len(lines)} lines):")
+        logger.info(f"🤔 [PLAN] Generated ({len(lines)} lines):")
         for line in summary_lines[:PLAN_LOG_MAX_LINES]:
             logger.info(f"  {line}")
 
@@ -373,7 +373,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     #logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     self._log_plan_summary(plan_text)
                     state["last_planned_step"] = state["step_number"]
-                    state["pending_plan"] = plan_text  # Store to pass with next response to green
+                    state["pending_plan"] = plan_text # Store plan to attach to next tool response
                     did_plan = True
 
                 logger.debug(f"Sending {len(messages)} messages to LLM")
@@ -518,7 +518,9 @@ Example:
                     }
                     logger.info(f"Adding token metadata to FINAL_ANSWER: {tool_call['arguments']['_metadata']}")
 
-                # # Always forward tool intent verbatim & include pending plan in response (for green to trace)
+                # Attach pending plan to response so green agent can extract and trace it. 
+                # Flow: purple generates plan at PLANNING_INTERVAL → stores in state["pending_plan"]
+                #       → next tool call includes <plan>...</plan> block → extracted in green for tracing
                 pending_plan = state.pop("pending_plan", None)
                 plan_block = f"<plan>\n{pending_plan}\n</plan>\n" if pending_plan else ""
                 formatted = plan_block + "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"

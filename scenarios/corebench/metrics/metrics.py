@@ -35,6 +35,19 @@ TASK ADHERENCE:
     - Returns qualitative assessment [excellent/good/fair/poor] + [strengths] & [weaknesses]
     - Can be used as validation of the methodology score
 
+METHODOLOGY vs TASK ADHERENCE:
+These metrics are complementary, not redundant:
+
+    | Methodology (Deterministic)     | Task Adherence (LLM Judge)        |
+    |---------------------------------|-----------------------------------|
+    | WHAT did the agent do?          | HOW WELL did the agent do it?     |
+    | Read docs? (yes/no)             | Discovery efficiency (quality)    |
+    | Execution coverage (%)          | Core process quality              |
+    | Error recovery attempts (count) | Problem-solving quality           |
+    | Binary/quantitative signals     | Qualitative assessment + feedback |
+
+Methodology provides reproducible scoring; Task Adherence provides reasoning for debugging.
+
 EFFICIENCY: 
 - How resource-efficient was the agent's approach?
    - Steps used vs maximum allowed
@@ -42,7 +55,7 @@ EFFICIENCY:
    - Protocol/format errors encountered
 """
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict
 from typing import Any, Callable, Optional
 import json
 import logging
@@ -51,259 +64,29 @@ import os
 
 import re
 
-import ast
 import numpy as np
 from scipy.stats import t
 import litellm
 
+from scenarios.corebench.metrics.models import (
+    QuestionResult,
+    AccuracyMetrics,
+    TaskAdherenceMetrics,
+    ErrorRecoveryMetrics,
+    MethodologyScoreBreakdown,
+    MethodologyMetrics,
+    EfficiencyMetrics,
+    TaskEvaluation,
+    AggregateMetrics,
+)
+
 logger = logging.getLogger("evaluator.metrics")
 
-# =============================================================================
-# VISION QUESTION DETECTION
-# =============================================================================
-
-# Regex pattern for detecting vision-related questions based on CORE-Bench paper:
 _VISION_KEY_PATTERN = re.compile(r"^\s*fig(?:ure)?s?\b", re.IGNORECASE)
 
 def _is_vision_question(key: str) -> bool:
-    """
-    Check if a question key indicates vision/figure-related content.
-    
-    Based on CORE-Bench paper definition: questions requiring extraction of
-    results from figures, graphs, plots, charts, or images.
-    """
+    """Check if question requires vision tool based on regex pattern in CORE-Bench paper"""
     return bool(_VISION_KEY_PATTERN.search(key))
-
-
-# =============================================================================
-# JSON SERIALIZATION HELPERS
-# =============================================================================
-
-def _make_json_safe(obj: Any) -> Any:
-    """Recursively convert an object to be JSON serializable.
-    
-    Handles numpy types, dataclasses, and nested structures.
-    """
-    if obj is None:
-        return None
-    elif isinstance(obj, (np.bool_,)):
-        return bool(obj)
-    elif isinstance(obj, (np.integer,)):
-        return int(obj)
-    elif isinstance(obj, (np.floating,)):
-        return float(obj) if not np.isnan(obj) else None
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {str(k): _make_json_safe(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
-    elif hasattr(obj, '__dataclass_fields__'):
-        return _make_json_safe(asdict(obj))
-    else:
-        return obj
-
-
-# =============================================================================
-# DATA STRUCTURES
-# =============================================================================
-
-@dataclass
-class QuestionResult:
-    """Result for a single evaluation question."""
-    question: str
-    question_type: str  # "numeric", "string", "list"
-    is_vision: bool  # True if question requires figure analysis
-    correct: bool
-    submitted: Any
-    expected: Any = None
-    prediction_interval: Optional[dict] = None  # For numeric: {"lower": x, "upper": y}
-
-
-@dataclass 
-class AccuracyMetrics:
-    """Metrics for answer correctness."""
-    # Overall
-    total_questions: int
-    correct_answers: int
-    accuracy: float
-
-    # By modality
-    total_written: int
-    correct_written: int
-    written_accuracy: float
-
-    total_vision: int
-    correct_vision: int
-    vision_accuracy: float
-
-    # Detailed breakdown
-    question_results: list[QuestionResult]
-    missing_questions: list[str]
-    extra_questions: list[str]
-
-
-@dataclass
-class TaskAdherenceMetrics:
-    """LLM-as-Judge metric for task execution quality, providing qualitative assessment and feedback.
-
-    Evaluates how well the agent followed task instructions, navigated the codebase,
-    and solved problems.
-    """
-    score: float                # Overall quality score from 0.0 (poor) to 1.0 (excellent)
-    followed_instructions: bool # Whether the agent followed task prompt and documentation
-    reasoning: str              # LLM judge's explanation of assessment score
-    strengths: list[str]        # List of things the agent did well
-    weaknesses: list[str]       # List of areas for improvement
-    status: str = "success"     # "success" if LLM judge evaluation completed, "error" if judge API call failed
-    error_message: Optional[str] = None
-
-
-@dataclass
-class ErrorRecoveryMetrics:
-    """Metrics for tracking error recovery behavior.
-
-    Measures how well the agent handles and recovers from errors during execution.
-    A key predictor of success that captures agent persistence.
-
-    NOTE the _classify_error() function was added for
-    computing error classifications but they were being discarded. Error type
-    distribution is valuable for diagnostics (e.g., identifying if agents struggle
-    with import_error vs timeout vs file_not_found).
-    """
-    total_errors: int           # Total number of errors encountered
-    errors_recovered: int       # Number of errors where agent successfully continued
-    recovery_rate: float        # Fraction of (errors_recovered / total_errors)
-    consecutive_failures: int   # Maximum consecutive failed attempts
-    persistence_score: float    # Combined score 0.0-1.0 reflecting recovery behavior
-    error_types: dict[str, int] # Count of each error type (from _classify_error)
-
-
-@dataclass
-class MethodologyScoreBreakdown:
-    """Breakdown of methodology score components for transparency.
-
-    Shows how each factor contributed to the final methodology score,
-    making it easier to understand and debug scoring.
-    """
-    domain: str                          # Which scoring rubric was used
-    doc_read_score: float                # Points from reading documentation
-    script_read_score: float             # Points from reading target scripts
-    execution_coverage_score: float      # Points from execution coverage
-    successful_execution_score: float    # Points from successful execution
-    error_recovery_score: float          # Points from error recovery
-    penalty: float                       # Any penalties applied (negative)
-    violation_cap_applied: bool          # Whether violations capped the score
-    total: float                         # Final score after all components
-
-
-@dataclass
-class MethodologyMetrics:
-    """Deterministic methodology metrics extracted from execution traces.
-
-    These metrics capture observable behaviors without relying on LLM judgment,
-    providing objective measurement of whether the agent followed correct methodology.
-    """
-    # Discovery phase
-    read_documentation: bool        # Whether agent read README/REPRODUCING.md
-    docs_read: list[str]            # List of documentation files that were read
-    read_target_script: bool        # Whether agent inspected the script to run
-    scripts_read: list[str]         # List of target script files that were read
-
-    # Execution phase
-    attempted_execution: bool       # Whether agent tried to run target script
-    execution_attempts: int         # Number of execution attempts
-    successful_execution: bool      # Whether at least one execution succeeded (exit_code=0)
-
-    # Script coverage               - from task_prompt analysis
-    expected_scripts: list[str]         # Scripts parsed from task_prompt that should be executed
-    executed_scripts: list[str]         # Scripts the agent actually ran successfully
-    attempted_failed_scripts: list[str] # Scripts the agent attempted but failed (exit_code != 0)
-    execution_coverage: float           #  Fraction of expected scripts that were run (0.0-1.0)
-
-    # Stdout diagnostics            - for "ran code but output to stdout" cases)
-    # NOTE (2026-01-22): Added stdout_sample field - _extract_executed_scripts() was
-    # computing stdout sample but it was being discarded with `_` prefix. Stdout sample
-    # is valuable for diagnosing "ran code but got wrong answer" cases where the agent
-    # may have output results to stdout instead of writing to files.
-    stdout_captured: bool                   # Whether any stdout was captured from successful script runs
-    stdout_total_bytes: int                 # Total bytes of stdout captured
-    stdout_sample: str                      # Last N bytes of stdout (truncated if too large)
-
-    # Dependencies 
-    installed_dependencies: bool            # Whether agent ran pip/apt install commands
-
-    # Recovery
-    error_recovery: ErrorRecoveryMetrics    # Detailed error recovery metrics
-
-    # Anti-patterns
-    read_preexisting_results: bool          # Whether agent read results/ before executing
-    violations: list[str]                   # List of detected anti-pattern descriptions
-
-    # Final score
-    methodology_score: float = 0.0          # Combined deterministic methodology score (0.0-1.0)
-    score_breakdown: MethodologyScoreBreakdown | None = None  # Detailed breakdown of score components
-
-
-@dataclass
-class EfficiencyMetrics:
-    """Resource efficiency metrics.
-    
-    Tracks resource usage including steps, tool calls, time, and errors.
-    The command_timeouts field is useful for identifying when agents hit
-    infrastructure limits (e.g., slow Docker/emulation on ARM64).
-    """
-    steps_used: int
-    max_steps: int
-    tool_calls: int
-    time_seconds: float
-    protocol_errors: int
-    command_timeouts: int = 0  # Commands that hit timeout limit
-
-    @property
-    def step_efficiency(self) -> float:
-        """Fraction of max steps NOT used (higher = more efficient)."""
-        if self.max_steps == 0:
-            return 0.0
-        return 1.0 - (self.steps_used / self.max_steps)
-
-
-@dataclass
-class TaskEvaluation:
-    """Complete evaluation result for a single task."""
-    task_id: str
-    domain: str
-    success: bool  # True if all questions answered correctly
-
-    accuracy: AccuracyMetrics
-    task_adherence: TaskAdherenceMetrics
-    efficiency: EfficiencyMetrics
-
-    # Raw data for debugging
-    submitted_answer: Any
-    ground_truth: list[dict]
-
-    # Cost tracking (None if not available)
-    task_cost: Optional[float] = None
-    
-    # Process metrics (deterministic extraction from traces)
-    methodology_metrics: Optional[MethodologyMetrics] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization.
-
-        Uses _make_json_safe to handle numpy types and other non-serializable objects.
-        """
-        return _make_json_safe({
-            "task_id": self.task_id,
-            "domain": self.domain,
-            "success": self.success,
-            "accuracy": asdict(self.accuracy),
-            "task_adherence": asdict(self.task_adherence),
-            "efficiency": asdict(self.efficiency),
-            "task_cost": self.task_cost,
-            "methodology_metrics": asdict(self.methodology_metrics) if self.methodology_metrics else None,
-        })
 
 
 # =============================================================================
@@ -322,10 +105,6 @@ def evaluate_accuracy(
     
     For strings: Case-insensitive exact match.
     For lists: Element-wise exact comparison.
-    
-    Args:
-        ground_truth: List of result dicts from multiple runs (from core_test.json)
-        submitted: Agent's submitted answer dict
     """
     if not ground_truth or not ground_truth[0]:
             logger.error("Empty or invalid ground truth provided")
@@ -335,10 +114,7 @@ def evaluate_accuracy(
     if not isinstance(submitted, dict):
         logger.warning(f"Submitted answer is not a dict (got {type(submitted).__name__}), treating as empty")
         submitted = {}
-    
-    # Normalize submitted answers (handle % signs, convert strings to numbers where possible)
-    submitted = _normalize_submitted(submitted.copy() if submitted else {})
-    
+
     # Categorize ground truth keys by type
     reference = ground_truth[0]
     numeric_keys = [k for k, v in reference.items() if isinstance(v, (int, float))]
@@ -366,10 +142,10 @@ def evaluate_accuracy(
             total_written += 1
         
         if key not in submitted:
-            # Missing answer
+            # Missing answer - rare in practice since agents follow the prompt format
             result = QuestionResult(
                 question=key,
-                question_type=_get_type(key, numeric_keys, string_keys, list_keys),
+                question_type="unknown",
                 is_vision=is_vision,
                 correct=False,
                 submitted=None,
@@ -413,9 +189,8 @@ def evaluate_accuracy(
             else:
                 correct_written += 1
     
-    # Identify extra questions submitted but not required
+    # Identify extra questions submitted but not required (agent invented/reworded keys)
     extra_questions = [k for k in submitted.keys() if k not in required_questions]
-    missing_questions = [k for k in required_questions if k not in submitted]
 
     total = total_written + total_vision
     correct = correct_written + correct_vision
@@ -431,129 +206,8 @@ def evaluate_accuracy(
         correct_vision=correct_vision,
         vision_accuracy=correct_vision / total_vision if total_vision > 0 else 0.0,
         question_results=question_results,
-        missing_questions=missing_questions,
         extra_questions=extra_questions,
     )
-
-
-def _extract_numeric_value(text: str) -> Optional[float]:
-    """
-    Extract a numeric value from text, handling various formats.
-
-    Handles:
-    - Commas in numbers: "1,200,000" -> 1200000.0
-    - Dollar signs: "$6,003.03" -> 6003.03
-    - Percentage signs: "96.5%" -> 96.5
-    - Extra text: "$6,003.03 per person" -> 6003.03
-    - Word multipliers (when no currency symbol): "~1.2 Million" -> 1200000.0
-
-    Note on word multipliers:
-    - When there's a currency symbol ($), we DON'T apply word multipliers because
-      the multiplier is likely a unit label, not a scaling factor.
-      E.g., "$1.80 Trillion USD" -> 1.80 (question already asks in "Trillion USD" units)
-    - When there's NO currency symbol, we DO apply word multipliers.
-      E.g., "~1.2 Million" -> 1200000.0 (question asks for absolute count)
-
-    Returns:
-        Extracted float value, or None if no valid number found.
-    """
-    text_lower = text.lower().strip()
-    has_currency = '$' in text or '€' in text or '£' in text
-
-    # Remove common prefixes/symbols
-    cleaned = text.replace('$', '').replace('€', '').replace('£', '').replace('~', '').replace('%', '').strip()
-
-    # Try to find a number pattern (with optional commas and decimals)
-    # Pattern matches: 1,234,567.89 or 1234567.89 or 1234567 or .89
-    number_pattern = r'[\d,]+\.?\d*|\.\d+'
-    match = re.search(number_pattern, cleaned)
-
-    if not match:
-        return None
-
-    try:
-        # Remove commas and convert to float
-        num_str = match.group().replace(',', '')
-        value = float(num_str)
-
-        # Only apply word multipliers if NO currency symbol present
-        # Currency values with "Trillion/Million" are usually labeled units, not multipliers
-        # E.g., "$1.80 Trillion USD" means 1.80 in trillion-USD units (expected: 1.8)
-        # But "~1.2 Million lives" means 1,200,000 lives (expected: 1200000)
-        if not has_currency:
-            text_after_number = text_lower[text_lower.find(match.group()) + len(match.group()):]
-            text_before_number = text_lower[:text_lower.find(match.group())]
-            context = text_before_number + " " + text_after_number
-
-            if 'trillion' in context:
-                value *= 1_000_000_000_000
-            elif 'billion' in context:
-                value *= 1_000_000_000
-            elif 'million' in context:
-                value *= 1_000_000
-            elif 'thousand' in context or ' k' in context:
-                value *= 1_000
-
-        return value
-    except ValueError:
-        return None
-
-
-def _normalize_submitted(submitted: dict) -> dict:
-    """
-    Normalize submitted answers for comparison against expected values.
-
-    BUG FIX (2026-01-23): The original implementation only stripped whitespace and '%',
-    which caused agents to be marked WRONG for correct answers with different formatting.
-
-    Discovered issues (8 out of 157 numeric answers affected across all runs):
-
-    1. Commas in numbers - trace 58b9c99c, capsule-4977619:
-       - Submitted: "6,003.03" -> Expected: 6003.03 -> Marked WRONG (should be CORRECT)
-       - Submitted: "1,200,000" -> Expected: 1200000.0 -> Marked WRONG (should be CORRECT)
-
-    2. Dollar signs + extra text - trace 511f05a3, capsule-4977619:
-       - Submitted: "$6,003.03 per person" -> Expected: 6003.03 -> Marked WRONG
-       - Submitted: "$1.80 Trillion USD" -> Expected: 1.8 -> Marked WRONG
-
-    3. Word multipliers - trace a9093eb1, capsule-4977619:
-       - Submitted: "~1.2 Million" -> Expected: 1200000.0 -> Marked WRONG
-
-    4. Prefix text - trace ed7c1d42, capsule-7716865:
-       - Submitted: "ID 109" -> Expected: 109.0 -> Marked WRONG
-
-    This bug also prevented scale_mismatch detection from ever triggering, since
-    values remained as strings instead of being converted to floats for comparison.
-    """
-    for key, value in submitted.items():
-        if isinstance(value, str):
-            # First try simple float conversion (fastest path)
-            cleaned = value.strip().replace("%", "")
-            try:
-                submitted[key] = float(cleaned)
-                continue
-            except ValueError:
-                pass
-
-            # Try extracting numeric value from formatted text
-            # But only if the string looks primarily numeric (not just incidental digits)
-            # e.g., "$6,003.03" -> extract, but "top_2 distances" -> keep as string
-            extracted = _extract_numeric_value(value)
-            if extracted is not None:
-                # Check if digits represent a significant portion of the string
-                # This prevents "top_2 distances" (1/14=0.07) from being converted to 2.0
-                # But allows "$1.80 Trillion USD" (3/17=0.18) to be extracted
-                digit_count = sum(1 for c in value if c.isdigit() or c in '.,')
-                non_space_count = sum(1 for c in value if not c.isspace())
-                value_lower = value.lower()
-                # Always extract if word multipliers present (million, billion, etc.)
-                has_multiplier = any(m in value_lower for m in ['million', 'billion', 'trillion', 'thousand'])
-                # Only convert if digits are >15% of content OR has word multiplier
-                if has_multiplier or (non_space_count > 0 and digit_count / non_space_count > 0.15):
-                    submitted[key] = extracted
-            # Otherwise keep as string (for actual string answers)
-
-    return submitted
 
 
 def _check_scale_mismatch(submitted: float, interval: dict) -> tuple[bool, Optional[str]]:
@@ -630,6 +284,15 @@ def _evaluate_numeric(
     is_vision: bool,
 ) -> tuple[bool, QuestionResult]:
     """Evaluate a numeric answer against prediction interval."""
+    # Normalize string submissions to float.
+    # Agents sometimes output numeric answers as strings (e.g., "96.5%" or "1,200,000").
+    if isinstance(submitted, str):
+        cleaned = submitted.strip().replace('%', '').replace(',', '')
+        try:
+            submitted = float(cleaned)
+        except ValueError:
+            pass  # Keep as string, will fail the type check below
+
     if not isinstance(submitted, (int, float)) or (isinstance(submitted, float) and math.isnan(submitted)):
         return False, QuestionResult(
             question=key,
@@ -637,7 +300,7 @@ def _evaluate_numeric(
             is_vision=is_vision,
             correct=False,
             submitted=submitted,
-            prediction_interval=_round_interval(interval) if interval else None,
+            prediction_interval=interval,
         )
 
     if interval is None:
@@ -673,7 +336,7 @@ def _evaluate_numeric(
         is_vision=is_vision,
         correct=correct,
         submitted=submitted,
-        prediction_interval=_round_interval(interval),
+        prediction_interval=interval,
     )
 
 
@@ -705,80 +368,15 @@ def _evaluate_list(
 ) -> tuple[bool, QuestionResult]:
     """Evaluate a list answer (exact element-wise match).
 
-    Handles edge cases:
-    - None submitted → treated as empty list
-    - String representation of list → parsed with ast.literal_eval
+    Simple direct comparison:
     - Order matters: [1,2] != [2,1]
     - Type matters: [1, 2] != ["1", "2"]
-
-    Args:
-        key: Question identifier
-        submitted: Agent's submitted answer (may be None, list, string, or other)
-        expected: Ground truth list from reference
-        is_vision: Whether this question involves figure analysis
-
-    Returns:
-        Tuple of (is_correct, QuestionResult)
-
-    BUG FIX (2026-01-22):
-    ---------------------
-    CRITICAL BUG DISCOVERED: When agents submitted list answers as strings like
-    "[0.1, 0.05, 0.01]", the old code did `list(submitted)` which converted the
-    STRING into a list of CHARACTERS:
-
-        list("[0.1, 0.05, 0.01]")
-        → ['[', '0', '.', '1', ',', ' ', '0', '.', '0', '5', ',', ' ', '0', '.', '0', '1', ']']
-
-    This caused FALSE NEGATIVES where correct answers were marked wrong!
-
-    EVIDENCE (from trace analysis of run 9f352cee, capsule-0921079):
-        - Agent submitted: "[0.1, 0.05, 0.01]" (string representation)
-        - Got parsed as: ["[", "0", ".", "1", ",", " ", ...] (17-element char array!)
-        - Expected was: [0.1, 0.05, 0.01] (3-element float list)
-        - Result: INCORRECT (but should have been CORRECT!)
-
-    The fix uses ast.literal_eval() to properly parse string representations of
-    Python lists, tuples, dicts, etc. This safely evaluates literal structures
-    without executing arbitrary code.
     """
     # Handle None as empty list
     if submitted is None:
         submitted = []
 
-    # Handle string representations of lists (e.g., "[0.1, 0.05, 0.01]")
-    # This fixes the critical bug where list(string) creates a char array
-    if isinstance(submitted, str):
-        submitted_stripped = submitted.strip()
-        if submitted_stripped.startswith('[') and submitted_stripped.endswith(']'):
-            try:
-                # ast.literal_eval safely parses Python literals (lists, dicts, etc.)
-                # without executing arbitrary code
-                parsed = ast.literal_eval(submitted_stripped)
-                if isinstance(parsed, (list, tuple)):
-                    submitted = list(parsed)
-                    logger.debug(f"Parsed string list '{submitted_stripped}' → {submitted}")
-            except (ValueError, SyntaxError) as e:
-                # If parsing fails, keep the original string for error reporting
-                logger.warning(f"Failed to parse list string '{submitted_stripped}': {e}")
-                pass
-
-    # Ensure submitted is a list for comparison
-    if not isinstance(submitted, list):
-        # Try to convert if it's a tuple or similar (but NOT a string anymore!)
-        if isinstance(submitted, tuple):
-            submitted = list(submitted)
-        else:
-            # Can't convert, definitely incorrect
-            return False, QuestionResult(
-                question=key,
-                question_type="list",
-                is_vision=is_vision,
-                correct=False,
-                submitted=submitted,
-                expected=expected,
-            )
-
-    # Exact element-wise comparison (order matters, types matter)
+    # Direct comparison (order matters, types matter)
     correct = bool(submitted == expected)
 
     return correct, QuestionResult(
@@ -789,23 +387,6 @@ def _evaluate_list(
         submitted=submitted,
         expected=expected,
     )
-
-
-def _get_type(key: str, numeric: list, strings: list, lists: list) -> str:
-    if key in numeric:
-        return "numeric"
-    if key in strings:
-        return "string"
-    if key in lists:
-        return "list"
-    return "unknown"
-
-
-def _round_interval(interval: dict) -> dict:
-    return {
-        "lower": round(interval["lower"], 6),
-        "upper": round(interval["upper"], 6),
-    }
 
 
 def _empty_accuracy_metrics() -> AccuracyMetrics:
@@ -820,115 +401,141 @@ def _empty_accuracy_metrics() -> AccuracyMetrics:
         correct_vision=0,
         vision_accuracy=0.0,
         question_results=[],
-        missing_questions=[],
         extra_questions=[],
     )
 
 
 # =============================================================================
 # TASK ADHERENCE EVALUATION (LLM-as-Judge)
-# judge gets passed tool calls + results
 # =============================================================================
-TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI agent executed a computational reproducibility benchmark task.
+# Provides qualitative assessment of agent execution for debugging and improvement.
+# Unlike methodology_score (deterministic), this is subjective LLM judgment.
+#
+# WHAT THE JUDGE RECEIVES:
+# 1. Domain (corebench_easy/medium/hard)
+# 2. Task instruction (e.g., "Run main.py")
+# 3. Questions to answer (e.g., ["What is the accuracy?", "What is the F1 score?"])
+# 4. Capsule docs: README files from workspace/environment/
+#    - Up to 4 files, max 6KB each, 12KB total
+#    - Shows what documentation was available to the agent
+# 5. Execution stats: tool_calls_count, command_timeouts
+# 6. Tool interactions: up to 24 tool call/result pairs (truncated)
+#
+# WHAT THE JUDGE DOES NOT RECEIVE (to avoid anchoring bias):
+# - Accuracy scores
+# - Methodology score
+# - The actual answer content
+#
+# NOTE: We do NOT cap scores for process violations (e.g., reading pre-existing
+# results). Task adherence focuses on qualitative assessment: how well did the
+# agent execute, problem-solve, and discover information? This provides debugging
+# feedback, not penalties.
+# =============================================================================
 
-## CORE PRINCIPLE
-CoreBench measures COMPUTATIONAL REPRODUCIBILITY - the ability to re-run scientific code and reproduce results.
-- Reading pre-existing results is NOT reproduction (even if answer is correct)
-- Following the correct process is more important than getting the right answer
-- task_adherence measures PROCESS FIDELITY, not outcome correctness
+# Domain-specific criteria for LLM judge - only the relevant one is injected
+DOMAIN_CRITERIA = {
+    "corebench_hard": """
+## Hard Mode
+
+The agent must figure out how to run the code and reproduce results. It could do this by:
+- Reading README.md or other documentation
+- Inspecting scripts to understand dependencies
+- Exploring the directory structure
+- Trial and error with debugging
+
+## Gold Standard Workflow
+Understand the codebase → Execute the code → Debug errors if needed → Extract results
+
+## Core Process Scoring Guide (50%)
+- **45-50**: Successfully executed code and extracted results
+- **30-44**: Executed code but didn't extract results, or partial execution
+- **15-29**: Explored codebase but never executed
+- **0-14**: No meaningful attempt
+
+## Red Flags
+- Never attempted to run code
+- Gave up after first error without trying to debug
+""",
+
+    "corebench_medium": """
+## Medium Mode
+
+The agent has access to REPRODUCING.md with step-by-step instructions.
+
+## Gold Standard Workflow
+Read REPRODUCING.md instructions → Execute documented command → Handle errors → Generate output
+
+## Core Process Scoring Guide (50%)
+- **45-50**: Followed documented instructions and executed successfully
+- **30-44**: Found instructions but execution incomplete
+- **15-29**: Attempted execution without reading instructions
+- **0-14**: No execution attempt
+
+## Red Flags
+- Never attempted documented command
+- Ignored REPRODUCING.md instructions
+""",
+
+    "corebench_easy": """
+## Easy Mode
+
+The task is to READ existing results from the results/ directory, NOT re-run code.
+
+## Gold Standard Workflow
+List results/ directory → Read output files → Extract values
+
+## Core Process Scoring Guide (50%)
+- **45-50**: Located and read results files, extracted values
+- **30-44**: Found results but incomplete extraction
+- **15-29**: Struggled to locate results files
+- **0-14**: Wasted time running scripts instead of reading results
+
+## Red Flags
+- Attempted to run scripts or install dependencies (unnecessary)
+""",
+}
+
+TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI agent executed a computational reproducibility benchmark task.
+{domain_criteria}
+
+## Other Components
+- **Problem Solving (25%)**: How well did agent handle errors? (20-25: debugged and persisted, 10-19: tried but gave up, 0-9: no error handling)
+- **Discovery (15%)**: How efficiently did agent find information? (12-15: direct path, 6-11: some wandering, 0-5: lost)
+- **Technical (10%)**: Command correctness, avoiding redundant operations
 
 ## Task Context
-Domain: {domain}
-Task prompt: {task_prompt}
-{capsule_context}
+Task instruction: {task_prompt}
 
-## Domain-Specific Success Criteria
+Questions to answer:
+{questions}
 
-### MEDIUM MODE (corebench_medium)
-**Gold Standard:** Read markdown instructions → Execute documented command → Handle errors → Generate output
-
-**Automatic Disqualifiers (cap score at 0.3):**
-- Read pre-existing results instead of executing
-- Never attempted documented command
-
-### HARD MODE (corebench_hard)
-**Context:** In hard mode, the following are DELETED:
-- REPRODUCING.md (step-by-step reproduction instructions)
-- code/run.sh and code/run (entry point scripts)
-- environment/Dockerfile
-- results/ directory
-
-**NOT deleted (available to agent):**
-- README.md files
-- All source code files
-
-The agent must figure out how to run the code by:
-- Understanding the repository structure
-- Reading README.md for project context and setup instructions
-- Reading the target script to understand dependencies
-- Inferring execution method from the code itself
-
-**Gold Standard:** Analyze code/scripts → Identify dependencies → Set up environment → Execute target script → Debug errors (if any) → Generate output
-
-**Automatic Disqualifiers (cap score at 0.3):**
-- Read pre-existing results instead of executing
-- Never attempted to reproduce the results by running code
-
-**NOT a disqualifier in hard mode:**
-- Using code analysis as a discovery method (reading script source to understand dependencies)
-
-### EASY MODE (corebench_easy)
-**Gold Standard:** List results/ directory → Read output files → Extract exact values → DO NOT execute code
-
-**Disqualifiers:**
-- Attempted to run scripts or install dependencies
-
-## Scoring Rubric (0.0 - 1.0)
-
-### Component Weights
-- **Core Process (50%)**: Did agent follow the primary reproduction workflow?
-- **Problem Solving (25%)**: How well did agent handle obstacles?
-- **Discovery (15%)**: How efficiently did agent find needed information?
-- **Technical Execution (10%)**: Proper tool usage and commands
-
+Documentation available:
+{capsule_docs}
 
 ## Execution Trace
-Steps taken: {steps_used}
-Tool calls: {tool_calls_count}
-Protocol errors: {protocol_errors}
-Command timeouts: {command_timeouts}
-
+Tool calls: {tool_calls_count}, Command timeouts: {command_timeouts}
 {timeout_note}
 
 Tool calls + results:
 {tool_interactions}
 
-Final answer: {has_answer}
+Final answer provided: {has_answer}
 
-## Process Metrics (Deterministic)
-{methodology_metrics_summary}
+## Output
+Assign scores: Core _/50, Problem _/25, Discovery _/15, Technical _/10
 
-## Your Task
-
-1. Assign component scores to the trace: Core _/50, Problem _/25, Discovery _/15, Technical _/10
-2. Check for automatic penalties
-3. Calculate final score and write reasoning
-
-## Output Format
 ```json
 {{
     "score": <float 0.0-1.0>,
-    "followed_instructions": <boolean>,
-    "reasoning": "<Decision Tree path + component breakdown + penalties>",
+    "reasoning": "<component breakdown + observations>",
     "component_scores": {{
         "core_process": "<X/50>",
         "problem_solving": "<X/25>",
         "discovery": "<X/15>",
         "technical": "<X/10>"
     }},
-    "penalties_applied": ["<list any penalties>"],
-    "strengths": ["<specific behaviors>"],
-    "weaknesses": ["<specific gaps>"]
+    "strengths": ["<specific good behaviors>"],
+    "weaknesses": ["<specific gaps and any red flags>"]
 }}
 ```
 """
@@ -942,7 +549,7 @@ def _read_text_file_head_bytes(path: str, max_bytes: int) -> tuple[str, bool, in
     return text, truncated, consumed
 
 
-_README_FILENAME_RE = re.compile(r"^readme(?:\\.[a-z0-9]+)?$", re.IGNORECASE)
+_README_FILENAME_RE = re.compile(r"^readme(?:\.[a-z0-9]+)?$", re.IGNORECASE)
 _INCLUDE_DOC_EXTENSIONS = {"", ".md", ".markdown", ".txt", ".rst"}
 _EXCLUDE_DOC_EXTENSIONS = {".pdf"}
 
@@ -1015,13 +622,18 @@ def _discover_capsule_docs(env_dir: str, *, max_depth: int = 4) -> tuple[list[st
     return sorted(set(included), key=_sort_key), excluded
 
 
-def _build_capsule_context(
+def _build_capsule_docs(
     *,
     workspace_dir: Optional[str] = None,
     max_total_bytes: int = 12_000,
     per_file_bytes: int = 6_000,
     max_files: int = 4,
-) -> tuple[str, dict[str, Any]]:
+) -> str:
+    """Build capsule documentation string for LLM judge context.
+
+    Returns formatted string showing what README/doc files exist in the capsule
+    and their contents (truncated to fit budget).
+    """
     workspace_dir = (workspace_dir or "").strip()
     if not workspace_dir:
         workspace_dir = (os.environ.get("COREBENCH_WORKSPACE_DIR") or "").strip() or _capsule_default_workspace_dir()
@@ -1030,15 +642,15 @@ def _build_capsule_context(
 
     docs, excluded = _discover_capsule_docs(env_dir)
     if not docs and not excluded:
-        return "", {"workspace_dir": workspace_dir, "env_dir": env_dir, "docs": [], "excluded": excluded, "included": []}
+        return ""
 
     remaining = max_total_bytes
-    included: list[dict[str, Any]] = []
+    included_count = 0
     skipped: list[str] = []
     chunks: list[str] = []
 
     for rel_path in docs:
-        if len(included) >= max_files or remaining <= 0:
+        if included_count >= max_files or remaining <= 0:
             skipped.append(rel_path)
             continue
 
@@ -1054,14 +666,7 @@ def _build_capsule_context(
 
         suffix = "\n...[truncated]..." if truncated else ""
         chunks.append(f"### {rel_path}\n```\n{text}{suffix}\n```")
-        included.append(
-            {
-                "path": rel_path,
-                "bytes_consumed": consumed,
-                "truncated": truncated,
-                "included_bytes": read_bytes,
-            }
-        )
+        included_count += 1
         remaining -= consumed
 
     overview_lines: list[str] = []
@@ -1090,18 +695,7 @@ def _build_capsule_context(
 
     overview = "\n".join(overview_lines) + "\n"
     body = "\n\n".join(chunks)
-    context = overview if not body else overview + "\n" + body + "\n"
-
-    debug = {
-        "workspace_dir": workspace_dir,
-        "env_dir": env_dir,
-        "docs": docs,
-        "excluded": excluded,
-        "included": included,
-        "skipped": skipped,
-        "remaining_bytes": remaining,
-    }
-    return context, debug
+    return overview if not body else overview + "\n" + body + "\n"
 
 
 def _build_tool_interactions(
@@ -1166,42 +760,54 @@ def _build_tool_interactions(
     return "\n\n".join(formatted_head + [f"... ({skipped} tool interactions omitted) ..."] + formatted_tail)
 
 
+def _calculate_score_from_components(component_scores: dict[str, str], fallback_score: float) -> float:
+    """Calculate task adherence score from component scores.
+
+    Parses component scores like {"core_process": "30/50", "problem_solving": "12/25", ...}
+    and computes the final score as sum of numerators / 100.
+
+    Falls back to LLM-provided score if parsing fails.
+    """
+    if not component_scores:
+        return fallback_score
+
+    total = 0
+    try:
+        for key, value in component_scores.items():
+            # Expected format: "30/50", "12/25", etc.
+            if "/" not in str(value):
+                logger.warning(f"Invalid component score format for {key}: {value}")
+                return fallback_score
+            parts = str(value).split("/")
+            if len(parts) != 2:
+                logger.warning(f"Invalid component score format for {key}: {value}")
+                return fallback_score
+            numerator = float(parts[0].strip())
+            total += numerator
+        return total / 100.0
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Failed to parse component scores, using LLM score: {e}")
+        return fallback_score
+
+
 async def evaluate_task_adherence(
     domain: str,
     task_prompt: str,
-    steps_used: int,
+    questions: list[str],
     tool_calls_count: int,
-    protocol_errors: int,
     submitted: dict[str, Any],
-    accuracy_result: AccuracyMetrics,
-    action_trace: list[dict],
     tool_calls: Optional[list[dict[str, Any]]] = None,
     tool_results: Optional[list[dict[str, Any]]] = None,
     workspace_dir: Optional[str] = None,
     trace_event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     judge_model: str = "nebius/openai/gpt-oss-120b",  # match DEFAULT_MODEL
     command_timeouts: int = 0,
-    methodology_metrics: Optional[MethodologyMetrics] = None,
 ) -> TaskAdherenceMetrics:
     """Use LLM-as-judge to evaluate task execution quality.
 
     NOTE: Accuracy is intentionally NOT passed to the judge to avoid anchoring bias.
     The judge should evaluate process fidelity independently of outcome correctness.
     """
-    action_summary = _build_action_summary(action_trace)
-
-    # Build process metrics summary for the judge - factual info only, NO scores to avoid anchoring bias
-    if methodology_metrics:
-        methodology_metrics_summary = f"""Documentation Read: {'Yes' if methodology_metrics.read_documentation else 'No'} ({', '.join(methodology_metrics.docs_read[:3]) if methodology_metrics.docs_read else 'none'})
-Target Script Read: {'Yes' if methodology_metrics.read_target_script else 'No'} ({', '.join(methodology_metrics.scripts_read[:5]) if methodology_metrics.scripts_read else 'none'})
-Execution Attempted: {'Yes' if methodology_metrics.attempted_execution else 'No'} ({methodology_metrics.execution_attempts} attempts)
-Execution Succeeded: {'Yes' if methodology_metrics.successful_execution else 'No'}
-Dependencies Installed: {'Yes' if methodology_metrics.installed_dependencies else 'No'}
-Errors Encountered: {methodology_metrics.error_recovery.total_errors} ({methodology_metrics.error_recovery.errors_recovered} recovered)
-Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.violations else 'None'}"""
-    else:
-        methodology_metrics_summary = "(Process metrics not available - evaluate from trace)"
-
     # Build timeout context note for fair judging
     if command_timeouts > 0:
         timeout_note = (
@@ -1213,20 +819,25 @@ Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.vi
     else:
         timeout_note = ""
 
-    capsule_context, capsule_debug = _build_capsule_context(workspace_dir=workspace_dir)
+    capsule_docs = _build_capsule_docs(workspace_dir=workspace_dir)
     tool_interactions = _build_tool_interactions(tool_calls or [], tool_results or [])
+
+    # Format questions as numbered list for clarity
+    questions_formatted = "\n".join(f"  {i+1}. {q}" for i, q in enumerate(questions)) if questions else "(No questions specified)"
+
+    # Inject only the relevant domain criteria (defaults to hard mode)
+    domain_criteria = DOMAIN_CRITERIA.get(domain, DOMAIN_CRITERIA["corebench_hard"])
+
     prompt = TASK_ADHERENCE_PROMPT.format(
-        domain=domain,
         task_prompt=task_prompt,
-        capsule_context=capsule_context,
-        steps_used=steps_used,
+        questions=questions_formatted,
+        capsule_docs=capsule_docs,
+        domain_criteria=domain_criteria,
         tool_calls_count=tool_calls_count,
-        protocol_errors=protocol_errors,
         command_timeouts=command_timeouts,
         timeout_note=timeout_note,
         tool_interactions=tool_interactions,
         has_answer="Yes" if submitted else "No",
-        methodology_metrics_summary=methodology_metrics_summary,
     )
     
     # Same API configuration logic as corebench_agent.py
@@ -1256,20 +867,16 @@ Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.vi
             trace_event_callback(
                 {
                     "type": "llm_judge_input",
-                    "judge": "task_adherence",
                     "flow": "green -> judge",
                     "domain": domain,
                     "model": model_name,
                     "task_prompt": task_prompt,
-                    "steps_used": steps_used,
+                    "questions": questions,
                     "tool_calls_count": tool_calls_count,
-                    "protocol_errors": protocol_errors,
                     "command_timeouts": command_timeouts,
                     "timeout_note": timeout_note,
                     "has_answer": bool(submitted),
-                    "methodology_metrics_summary": methodology_metrics_summary,
-                    "action_summary": action_summary,
-                    "capsule_context_debug": capsule_debug,
+                    "capsule_docs": capsule_docs,  # readme files
                     "tool_interactions": tool_interactions,
                     "prompt": prompt,
                 }
@@ -1292,20 +899,22 @@ Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.vi
                 trace_event_callback(
                     {
                         "type": "llm_judge_output",
-                        "judge": "task_adherence",
                         "flow": "judge -> green",
                         "domain": domain,
                         "model": model_name,
-                        "raw": raw_content,
                         "parsed": result,
                     }
                 )
             except Exception as e:
                 logger.warning(f"Failed to write task adherence judge output trace: {e}")
         
+        # Calculate scores manually from LLM judge
+        component_scores = result.get("component_scores", {})
+        llm_score = float(result.get("score", 0.0))
+        calculated_score = _calculate_score_from_components(component_scores, llm_score)
+
         return TaskAdherenceMetrics(
-            score=float(result.get("score", 0.0)),
-            followed_instructions=bool(result.get("followed_instructions", False)),
+            score=calculated_score,
             reasoning=str(result.get("reasoning", "")),
             strengths=list(result.get("strengths", [])),
             weaknesses=list(result.get("weaknesses", [])),
@@ -1318,7 +927,6 @@ Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.vi
                 trace_event_callback(
                     {
                         "type": "llm_judge_error",
-                        "judge": "task_adherence",
                         "flow": "judge -> green",
                         "domain": domain,
                         "model": model_name,
@@ -1329,65 +937,12 @@ Violations: {', '.join(methodology_metrics.violations) if methodology_metrics.vi
                 logger.warning(f"Failed to write task adherence judge error trace: {trace_e}")
         return TaskAdherenceMetrics(
             score=0.0,
-            followed_instructions=False,
             reasoning=f"Evaluation failed: {e}",
             strengths=[],
             weaknesses=[],
             status="error",
             error_message=str(e),
         )
-
-
-def _build_action_summary(action_trace: list[dict], max_actions: int = 30) -> str:
-    """
-    Build a summary of purple agent tool calls and the MCP server results. 
-    """
-
-    # Helper to format a single event string
-    def _format_event(event: dict) -> str:
-        if event.get("type") != "tool_call":
-            return ""
-
-        turn = event.get("turn", "?")
-        name = event.get("tool", "unknown")  # tool_call events use "tool" field
-        args = event.get("arguments", {})
-        
-        if name == "execute_bash":
-            cmd = args.get("command", "")[:100]  # Truncate long commands
-            return f"[{turn}] bash: {cmd}"
-        elif name == "inspect_file_as_text":
-            path = args.get("file_path", "")
-            return f"[{turn}] read: {path}"
-        elif name == "FINAL_ANSWER":
-            return f"[{turn}] FINAL_ANSWER submitted"
-        else:
-            return f"[{turn}] {name}"
-
-    lines = []
-    
-    # Short trace, show everything
-    if len(action_trace) <= max_actions:
-        for event in action_trace:
-            line = _format_event(event)
-            if line: lines.append(line)
-            
-    # Long trace, show Head + Tail
-    else:
-        head_count = 10
-        for event in action_trace[:head_count]:
-            line = _format_event(event)
-            if line: lines.append(line)
-            
-        # SKIPPED SECTION
-        skipped_count = len(action_trace) - max_actions
-        lines.append(f"\n... [{skipped_count} intermediate steps skipped] ...\n")
-        
-        tail_count = max_actions - head_count
-        for event in action_trace[-tail_count:]:
-            line = _format_event(event)
-            if line: lines.append(line)
-
-    return "\n".join(lines) if lines else "(No actions recorded)"
 
 
 # =============================================================================
@@ -1425,6 +980,17 @@ def compute_efficiency(
 # =============================================================================
 # PROCESS METRICS (Deterministic Extraction from Traces)
 # =============================================================================
+#
+# This section extracts methodology metrics by analyzing tool_call/tool_result traces.
+# Unlike LLM-based evaluation, these metrics are fully deterministic and reproducible.
+#
+# Key behaviors tracked:
+# - Documentation reading (README, REPRODUCING.md)
+# - Script inspection (understanding what to run)
+# - Execution attempts and success
+# - Dependency installation
+# - Error recovery patterns
+# - Anti-patterns (e.g., reading pre-existing results before executing)
 
 def _is_documentation(path: str) -> bool:
     """Check if a file path is documentation (README, REPRODUCING.md, etc.)."""
@@ -1462,25 +1028,13 @@ def _is_target_execution(cmd: str) -> bool:
         return False
     cmd_lower = cmd.lower()
 
-    # EDGE CASE (2026-01-23): Certain R patterns via `Rscript -e "..."` are ACTUAL execution,
-    # not debugging. We must check for these BEFORE the general `rscript -e` exclusion below.
-    #
     # Patterns that indicate real execution:
     # - rmarkdown::render, knitr::knit, bookdown::render - rendering .Rmd/.Rnw files
-    #   Discovered in capsule-7186268 where agent rendered an .Rmd file
-    # - source( - running an R script via source('script.R')
-    #   Discovered in capsule-5136217 where agent ran `Rscript -e "source('script.R', echo=TRUE)"`
-    #   but attempted_execution was incorrectly set to False
     r_execution_patterns = ["rmarkdown::render", "knitr::knit", "bookdown::render", "source("]
     if any(pattern in cmd_lower for pattern in r_execution_patterns):
         return True
 
     # Exclude one-liner debugging commands and pip via python -m
-    # BUG FIX (2026-01-22): Added "rscript -e" to exclusions. In capsule-4933686,
-    # agent used debug commands like `Rscript -e "load(...); str(clinical)"` which
-    # incorrectly set successful_execution=True even though Main.R was never run.
-    # BUG FIX (2026-01-23): Added "--version" to exclusions. Version checks are not
-    # actual execution attempts.
     exclusion_patterns = [
         "python -c ",
         "python3 -c ",
@@ -1528,13 +1082,7 @@ def _is_target_execution(cmd: str) -> bool:
         return True
 
     # Shell script execution patterns
-    # BUG FIX (2026-01-23): Previous patterns "bash run", "sh run" only matched when
-    # bash/sh was immediately followed by "run". This missed commands like:
-    #   "bash code/run_all.sh" (path between bash and script name)
-    # Discovered in capsule-8412128 (trace 154d5dd9) where agent ran "bash code/run_all.sh"
-    # but attempted_execution was incorrectly set to False.
-    #
-    # New logic: Check if bash/sh is used with a .sh file anywhere in the command
+    # Check if bash/sh is used with a .sh file anywhere in the command
     if ("bash " in cmd_lower or "sh " in cmd_lower) and ".sh" in cmd_lower:
         return True
 
@@ -1578,9 +1126,6 @@ def _extract_script_reads_from_bash(cmd: str) -> list[str]:
 
     Returns:
         List of script file paths that were read by the command.
-
-    2026-01-26: Added fix where agents reading scripts via bash commands 
-    (sed, cat, head) weren't credited for "read_target_script"
     """
     if not cmd:
         return []
@@ -1634,11 +1179,11 @@ def _extract_script_reads_from_bash(cmd: str) -> list[str]:
 
 
 def _classify_error(summary: str) -> str:
-    """Classify an error type from tool result summary.
+    """Classify an error type from tool result summary for diagnostics.
 
-    Categories based on actual errors observed in CoreBench traces.
-
-    FOUND "OTHER" BUG: function isn't catching the actual error patterns in these traces. Check what the summaries actually contain
+    Returns error category (e.g., 'import_error', 'file_not_found', 'timeout')
+    based on patterns observed in CoreBench traces. Used in error recovery
+    metrics to understand what types of errors agents encounter.
     """
     if not summary:
         return "unknown"
@@ -1739,20 +1284,29 @@ def _compute_error_recovery(
     tool_calls: list[dict],
     tool_results: list[dict],
 ) -> ErrorRecoveryMetrics:
-    """Analyze error recovery patterns from tool interactions.
-
-    An error is "recovered" if the agent continues with productive actions after it.
-    """
+    """Analyze error recovery patterns from execution attempts."""
     # Build a timeline of success/failure
     results_by_turn: dict[int, dict] = {}
     for result in tool_results:
         turn = result.get("turn", 0)
         results_by_turn[turn] = result
 
-    errors = []
-    error_type_counts: dict[str, int] = {}  # Collect error types for diagnostics
+    # Only track execution attempts (filter out ls, cat, pip, etc.)
+    execution_events = []
+    error_type_counts: dict[str, int] = {}
 
     for call in tool_calls:
+        tool_name = call.get("tool", "")
+        if tool_name != "execute_bash":
+            continue
+
+        args = call.get("arguments", {})
+        cmd = args.get("command", "")
+
+        # Only track actual script executions, not ls/cat/pip/etc.
+        if not _is_target_execution(cmd):
+            continue
+
         turn = call.get("turn", 0)
         result = results_by_turn.get(turn, {})
         exit_code = result.get("exit_code")
@@ -1769,13 +1323,13 @@ def _compute_error_recovery(
         if error_type:
             error_type_counts[error_type] = error_type_counts.get(error_type, 0) + 1
 
-        errors.append({
+        execution_events.append({
             "turn": turn,
             "is_error": is_error,
             "error_type": error_type,
         })
 
-    total_errors = sum(1 for e in errors if e["is_error"])
+    total_errors = sum(1 for e in execution_events if e["is_error"])
 
     if total_errors == 0:
         return ErrorRecoveryMetrics(
@@ -1787,19 +1341,18 @@ def _compute_error_recovery(
             error_types={},
         )
 
-    # Count recoveries: error followed by successful action
+    # Count recoveries: execution error followed by execution success
     errors_recovered = 0
-    consecutive_failures = 0
     max_consecutive = 0
     current_streak = 0
 
-    for i, e in enumerate(errors):
+    for i, e in enumerate(execution_events):
         if e["is_error"]:
             current_streak += 1
             max_consecutive = max(max_consecutive, current_streak)
 
-            # Check if recovered (next action succeeds or agent continues)
-            if i + 1 < len(errors) and not errors[i + 1]["is_error"]:
+            # Check if recovered (next execution succeeds)
+            if i + 1 < len(execution_events) and not execution_events[i + 1]["is_error"]:
                 errors_recovered += 1
         else:
             current_streak = 0
@@ -1831,50 +1384,40 @@ def _parse_expected_scripts(task_prompt: str) -> list[str]:
     Parses script filenames mentioned in the task prompt that the agent should execute.
     This enables computing execution_coverage: what fraction of expected scripts were run.
 
-    Supported patterns (covers ~94% of CORE-Bench tasks):
+    Supported patterns (covers 62/66 = 94% of CORE-Bench tasks):
         - Python scripts: .py
         - Jupyter notebooks: .ipynb
         - Shell scripts: .sh
-        - R scripts: .R
-        - R Markdown: .Rmd
-        - Code Ocean entry point: "run the run file"
+        - R scripts & markdown: .R, .Rmd
 
-    NOT SUPPORTED (returns empty list):
-        - Python modules without extension: "Run 'physalia_automators.reports' as a python module"
-        - Vague "all files" patterns: "Run all the .R scripts in the folder"
+    NOT SUPPORTED (4 capsules return empty list, fall back to successful_execution signal):
+        - capsule-8536428: "Run the python files in the folder..." (vague, no specific filenames)
+        - capsule-3593259: "Run 'physalia_automators.reports' as a python module" (module notation)
+        - capsule-2345790: "Run all the .Rmd files..." (vague "all files" pattern)
+        - capsule-5136217: "Run all the .R scripts..." (vague "all files" pattern)
     """
     if not task_prompt:
         return []
 
     scripts = []
 
-    # these prompts are questionable in hard mode since it deletes run files
-    # Code Ocean convention "Run the run file" -> entry point is code/run or code/run.sh
-    if "run the run file" in task_prompt.lower():
-        scripts.append("run")
-
-    # Python scripts (.py)
-    # Example: "Run step_0_vit_encode.py, then step_1_train.py"
+    # Python scripts (.py), ex: "Run step_0_vit_encode.py, then step_1_train.py"
     py_matches = re.findall(r"['\"]?(\S+\.py)['\"]?", task_prompt)
     scripts.extend(py_matches)
 
-    # Jupyter notebooks (.ipynb)
-    # Example: "Run the jupyter notebook visualize_results.ipynb"
+    # Jupyter notebooks (.ipynb), ex: "Run the jupyter notebook visualize_results.ipynb"
     ipynb_matches = re.findall(r"['\"]?(\S+\.ipynb)['\"]?", task_prompt)
     scripts.extend(ipynb_matches)
 
-    # Shell scripts (.sh)
-    # Example: "Run the bash script 'demo.sh'"
+    # Shell scripts (.sh), ex: "Run the bash script demo.sh"
     sh_matches = re.findall(r"['\"]?(\S+\.sh)['\"]?", task_prompt)
     scripts.extend(sh_matches)
 
-    # R scripts (.R) - use word boundary to avoid matching .Rmd
-    # Example: "Run 'pancancer_calculation.R' using Rscript"
+    # R scripts (.R), ex: "Run pancancer_calculation.R using Rscript"
     r_matches = re.findall(r"['\"]?(\S+\.R)['\"]?(?!\w)", task_prompt)
     scripts.extend(r_matches)
 
-    # R Markdown (.Rmd)
-    # Example: "Run 'manuscript.Rmd' using Rscript and render it as a pdf"
+    # R Markdown (.Rmd), ex: "Run manuscript.Rmd using Rscript and render it as a pdf"
     rmd_matches = re.findall(r"['\"]?(\S+\.Rmd)['\"]?", task_prompt)
     scripts.extend(rmd_matches)
 
@@ -2020,7 +1563,6 @@ def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: l
     """Compute what fraction of expected scripts were executed.
 
     Handles special cases:
-    - "run" matches "run.sh" (Code Ocean convention) (we only care about hardmode)
     - Fuzzy matching for Jupyter notebooks with modified output names
 
     Args:
@@ -2032,12 +1574,6 @@ def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: l
         Coverage from 0.0 to 1.0
     """
     # No expected scripts parsed from task_prompt
-    # EDGE CASE (2026-01-23): In capsule-4977619, the agent ran verify_integrity.py and
-    # run_sage_simulation.py instead of the main entry point run_all.sh. The task_prompt
-    # only contained questions (no script names), so expected_scripts=[]. We can't verify
-    # they ran the RIGHT scripts, so we trust successful_execution as the signal:
-    # - If execution succeeded, give benefit of the doubt (1.0)
-    # - If execution failed, give no credit (0.0)
     if not expected_scripts:
         return 1.0 if successful_execution else 0.0
 
@@ -2045,13 +1581,12 @@ def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: l
     executed_basenames = {os.path.basename(s) for s in executed_scripts}
     matched = expected_basenames & executed_basenames
 
-    # Special case: "run" matches "run.sh"
+    # Special case: "run" matches "run.sh" (for medium difficulty tasks)
     if "run" in expected_basenames and "run" not in matched:
         if "run.sh" in executed_basenames:
             matched.add("run")
 
-    # Special case: Jupyter notebooks with modified output names
-    # e.g., expected "Notebook.ipynb" matches executed "exec_Notebook.ipynb"
+    # Jupyter notebooks with slighly different output names i.e. "Notebook.ipynb" matches "exec_Notebook.ipynb"
     for expected in expected_basenames - matched:
         if not expected.endswith(".ipynb"):
             continue
@@ -2209,7 +1744,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
     execution_coverage = _compute_execution_coverage(expected_scripts, executed_scripts, successful_execution)
     stdout_captured = stdout_total_bytes > 0
 
-    # Compute methodology score based on domain
+    # Compute methodology score based on domain (violations are tracked separately for diagnostics)
     methodology_score, score_breakdown = _compute_methodology_score(domain=domain,
         read_documentation=read_documentation,
         read_target_script=read_target_script,
@@ -2217,7 +1752,6 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
         successful_execution=successful_execution,
         installed_dependencies=installed_dependencies,
         error_recovery=error_recovery,
-        violations=violations,
         execution_coverage=execution_coverage,
     )
 
@@ -2253,7 +1787,6 @@ def _compute_methodology_score(
     successful_execution: bool,
     installed_dependencies: bool,
     error_recovery: ErrorRecoveryMetrics,
-    violations: list[str],
     execution_coverage: float = 0.0,
 ) -> tuple[float, MethodologyScoreBreakdown]:
     """Compute a deterministic methodology score from 0-1 based on observed behaviors.
@@ -2262,6 +1795,14 @@ def _compute_methodology_score(
     but not all expected scripts (parsed from task_prompt). This addresses
     the "stdout problem" where agents may run scripts correctly but not
     produce expected output files and just write results to stdout instead.
+
+    Scoring weights by domain:
+                        EASY    MEDIUM  HARD
+    Doc reading:        100%    25%     10%
+    Script reading:     -       -       20%
+    Exec coverage:      -       35%     30%
+    Successful exec:    -       25%     30%
+    Error recovery:     -       15%     10%
 
     Returns:
         Tuple of (final_score, breakdown) where breakdown shows each component's contribution.
@@ -2273,7 +1814,6 @@ def _compute_methodology_score(
     successful_execution_score = 0.0
     error_recovery_score = 0.0
     penalty = 0.0
-    violation_cap_applied = False
 
     if domain == "corebench_easy":
         # Full credit for reading files, penalty for execution attempts
@@ -2283,10 +1823,6 @@ def _compute_methodology_score(
             penalty = -0.7  # Penalty brings score down to 0.3
 
     elif domain == "corebench_medium":
-        # - Read docs (25%)
-        # - Execution coverage (35%) - partial credit based on expected vs executed scripts
-        # - Successful execution (25%)
-        # - Error recovery (15%)
         if read_documentation:
             doc_read_score = 0.25
         if execution_coverage > 0:
@@ -2298,16 +1834,10 @@ def _compute_methodology_score(
         error_recovery_score = error_recovery.persistence_score * 0.15
 
     elif domain == "corebench_hard":
-        # - Read documentation/README (15%)
-        # - Read code/scripts (15%)
-        # - Execution coverage (30%) - partial credit based on expected vs executed scripts
-        # - Successful execution (30%)
-        # - Error recovery (10%)
-        # - Penalty: no dep install on failure (-5%)
         if read_documentation:
-            doc_read_score = 0.15
+            doc_read_score = 0.10
         if read_target_script:
-            script_read_score = 0.15
+            script_read_score = 0.20
         if execution_coverage > 0:
             execution_coverage_score = 0.30 * execution_coverage
         elif attempted_execution:
@@ -2320,15 +1850,8 @@ def _compute_methodology_score(
         if not successful_execution and not installed_dependencies and attempted_execution:
             penalty = -0.05
 
-    # Compute raw total
     raw_total = (doc_read_score + script_read_score + execution_coverage_score +
                  successful_execution_score + error_recovery_score + penalty)
-
-    # Apply violation cap for corebench_hard
-    if domain == "corebench_hard" and violations:
-        if raw_total > 0.3:
-            violation_cap_applied = True
-            raw_total = 0.3
 
     final_score = min(1.0, max(0.0, raw_total))
 
@@ -2340,7 +1863,6 @@ def _compute_methodology_score(
         successful_execution_score=successful_execution_score,
         error_recovery_score=error_recovery_score,
         penalty=penalty,
-        violation_cap_applied=violation_cap_applied,
         total=final_score,
     )
 
@@ -2350,41 +1872,6 @@ def _compute_methodology_score(
 # =============================================================================
 # AGGREGATE METRICS
 # =============================================================================
-
-@dataclass
-class AggregateMetrics:
-    """Aggregate metrics across all tasks in a benchmark run.
-
-    Provides summary statistics for comparing agent performance across
-    different models, configurations, or benchmark versions.
-    """
-    num_tasks: int
-    num_successful: int
-    pass_rate: float
-
-    # Accuracy metrics
-    mean_accuracy: float
-    mean_written_accuracy: float
-    mean_vision_accuracy: float
-
-    mean_adherence: float
-
-    # Methodology metrics (deterministic)
-    mean_methodology_score: float
-    doc_read_rate: float
-    execution_attempt_rate: float
-    successful_execution_rate: float
-    mean_error_recovery_rate: float
-
-    mean_steps: float
-    mean_tool_calls: float
-    mean_time: float
-
-    task_results: dict[str, dict]
-
-    # Aggregate error diagnostics (for identifying systemic issues)
-    error_type_distribution: dict[str, int] = field(default_factory=dict)  # Count of each error type across all tasks
-
 
 def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     """Aggregate metrics across multiple task evaluations."""
@@ -2440,7 +1927,7 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     mean_tools = np.mean([e.efficiency.tool_calls for e in evaluations])
     mean_time = np.mean([e.efficiency.time_seconds for e in evaluations])
 
-    # Per-task summary (now includes time_seconds for per-task timing)
+    # Per-task summary
     task_results = {
         e.task_id: {
             "success": bool(e.success),

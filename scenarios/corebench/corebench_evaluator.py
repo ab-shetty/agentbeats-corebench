@@ -73,10 +73,13 @@ from scenarios.corebench.metrics.metrics import (
     AccuracyMetrics,
     TaskAdherenceMetrics,
     EfficiencyMetrics,
+    _empty_accuracy_metrics,
+)
+from scenarios.corebench.metrics.models import (
+    _make_json_safe,
     TaskEvaluation,
     AggregateMetrics,
     MethodologyMetrics,
-    _empty_accuracy_metrics,
 )
 
 from model_prices import MODEL_PRICES_DICT
@@ -162,15 +165,22 @@ class ExecutionTraceWriter:
         self.close()
         return None  # Don't suppress exceptions
 
+    # Fields that should NOT be truncated (needed for checking llm as a judge reproducibility)
+    _NO_TRUNCATE_KEYS = {"prompt"}
+
     @staticmethod
-    def _truncate(value: Any, *, limit: int = 4000) -> Any:
+    def _truncate(value: Any, *, limit: int = 4000, key: str = "") -> Any:
         """Recursively truncate long strings in nested structures."""
         if isinstance(value, str) and len(value) > limit:
             return value[:limit] + f"... (truncated, original_len={len(value)})"
         if isinstance(value, list):
             return [ExecutionTraceWriter._truncate(v, limit=limit) for v in value]
         if isinstance(value, dict):
-            return {k: ExecutionTraceWriter._truncate(v, limit=limit) for k, v in value.items()}
+            return {
+                k: v if k in ExecutionTraceWriter._NO_TRUNCATE_KEYS
+                else ExecutionTraceWriter._truncate(v, limit=limit, key=k)
+                for k, v in value.items()
+            }
         return value
 
     def add(self, event: dict[str, Any], *, truncate: bool = True) -> None:
@@ -664,14 +674,13 @@ class CoreBenchEvaluator(GreenAgent):
         os.makedirs(self._workspace_dir, exist_ok=True)
         logger.debug("Workspace reset complete")
     
-    def _apply_difficulty_filters(self, domain: str) -> tuple[bool, list[str]]:
+    def _apply_difficulty_filters(self, domain: str) -> list[str]:
         """
         Remove files based on difficulty level.
 
         Returns:
-            Tuple of (results_removed: bool, deleted_files: list[str])
+            List of deleted file/directory paths (relative to workspace)
         """
-        removed_results = False
         deleted_files: list[str] = []
         env_dir = os.path.join(self._workspace_dir, "environment")
         results_dir = os.path.join(env_dir, "results")
@@ -690,7 +699,6 @@ class CoreBenchEvaluator(GreenAgent):
                     rel_path = _rel(results_path)
                     logger.info(f"Removing {rel_path}/ for {domain}")
                     shutil.rmtree(results_path)
-                    removed_results = True
                     deleted_files.append(f"{rel_path}/")
 
         # HARD: Remove REPRODUCING.md, environment/ and run scripts
@@ -1007,7 +1015,7 @@ class CoreBenchEvaluator(GreenAgent):
                         success=False,
                         accuracy=_empty_accuracy_metrics(),
                         task_adherence=TaskAdherenceMetrics(
-                            score=0.0, followed_instructions=False,
+                            score=0.0,
                             reasoning=f"Task failed: {e}", strengths=[], weaknesses=["Task execution failed"]
                         ),
                         efficiency=EfficiencyMetrics(
@@ -1155,6 +1163,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             # Write run summary to trace folder
             if run_trace_dir:
                 summary_path = run_trace_dir / f"run_summary_{run_id}.json"
+                # Apply rounding to avoid trailing numbers like 0.33333333333
+                aggregate_dict = _make_json_safe(asdict(aggregate)) if aggregate else None
                 with open(summary_path, "w") as f:
                     json.dump({
                         "run_id": run_id,
@@ -1163,7 +1173,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                         "num_tasks": len(resolved_task_ids),
                         "task_ids": [t["capsule_id"] for t in resolved_task_ids],
                         "model_used": model_used,
-                        "aggregate_metrics": asdict(aggregate) if aggregate else None,
+                        "aggregate_metrics": aggregate_dict,
                     }, f, indent=2, default=str)
                 logger.info(f"📄 Run summary written to: {summary_path}")
 
@@ -1352,7 +1362,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             is_first_message = False
             steps_used += 1
 
-            # Extract and trace plan if present (purple agent piggybacks plan on tool call)
+            # Extract and trace "plan" if present
             plan_match = re.search(r'<plan>\n?(.*?)\n?</plan>', response, re.DOTALL)
             if plan_match:
                 if trace:
@@ -1443,7 +1453,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     # Show truncated output (first 3 lines)
                     output_lines = tool_result.split('\n')
                     if len(output_lines) > 5:
-                        preview = '\n'.join(output_lines[:3])
+                        preview = '\n'.join(output_lines[:5])
                         logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
                     elif tool_result.strip():
                         logger.info(f"   Output: {tool_result[:200]}")
@@ -1635,7 +1645,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             or "timeout" in str(r.get("summary", "")).lower()
         )
 
-        # METHODOLOGY METRICS (Deterministic extraction from traces)
+        # METHODOLOGY METRICS - Deterministic scoring based on observable agent behavior
         logger.info(f"2️⃣  Extracting methodology metrics...")
         methodology_metrics = extract_methodology_metrics(
             tool_calls=tool_call_events,
@@ -1751,8 +1761,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             # Penalties
             if breakdown.penalty != 0:
                 logger.info(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")
-            if breakdown.violation_cap_applied:
-                logger.info(f"     ⚠️ Capped at 0.30 due to violations")
             logger.info(f"     ─────────────────────")
         # Show additional details
         if methodology_metrics.stdout_captured:
@@ -1795,7 +1803,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     "successful_execution_score": methodology_metrics.score_breakdown.successful_execution_score,
                     "error_recovery_score": methodology_metrics.score_breakdown.error_recovery_score,
                     "penalty": methodology_metrics.score_breakdown.penalty,
-                    "violation_cap_applied": methodology_metrics.score_breakdown.violation_cap_applied,
                     "total": methodology_metrics.score_breakdown.total,
                 } if methodology_metrics.score_breakdown else None,
             })
@@ -1806,19 +1813,15 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         adherence_metrics = await evaluate_task_adherence(
             domain=domain,
             task_prompt=task_prompt,
-            steps_used=steps_used,
+            questions=expected_keys,  # The actual questions the agent needs to answer
             tool_calls_count=tool_calls_count,
-            protocol_errors=protocol_errors,
             submitted=reported_result,
-            accuracy_result=accuracy_metrics,
-            action_trace=tool_call_events,
             tool_calls=tool_call_events,
             tool_results=tool_result_events,
             workspace_dir=self._workspace_dir,
             trace_event_callback=trace_event_callback,
             judge_model=judge_llm,
             command_timeouts=command_timeouts,
-            methodology_metrics=methodology_metrics,
         )
         logger.info(f"   ✓ Adherence Score: {adherence_metrics.score:.2f}/1.0")
         if adherence_metrics.reasoning:
