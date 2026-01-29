@@ -1455,5 +1455,142 @@
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.5471833.v2"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python", 
+        "capsule_title": "Deep learning-enabled accurate assessment of gait impairments in Parkinson's disease using smartphone videos",
+        "capsule_id": "capsule-0152700",
+        "task_prompt": "Run the corresponding models and report on the generated output.",
+        "results": [
+            {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            },
+            {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            }, 
+            {
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
+            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            }
+            
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.7700825.v1"
+    },
+    {
+        "field": "Medical Sciences",
+        "language": "Python", 
+        "capsule_title": "A motif preferred adenine base editor with minimal bystander and off-targets editing",
+        "capsule_id": "capsule-2242462",
+        "task_prompt": "Run the main.py file and report on the final outputs.",
+        "results": [
+            {
+                "What is the Chromosome chr1 with positioning 1013983, IsNGGMatch status?": "True",
+                "What is the Chromosome chr1 with positioning 1319313, ABE8e_NG status?": "False"
+            },
+            {
+                "What is the Chromosome chr1 with positioning 1013983, IsNGGMatch status?": "True",
+                "What is the Chromosome chr1 with positioning 1319313, ABE8e_NG status?": "False"
+            },
+            {
+                "What is the Chromosome chr1 with positioning 1013983, IsNGGMatch status?": "True",
+                "What is the Chromosome chr1 with positioning 1319313, ABE8e_NG status?": "False"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.8003706.v2"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "PM-Score-Net: A Disjoint-Label Multi-Task Learning Framework for Automated Continuous Severity Assessment of Myopic Maculopathy",
+        "capsule_id": "capsule-3762736",
+        "task_prompt": "Run all the eval scripts and report on the final outputs.",
+        "results": [
+            {
+                "What is the Task1_Only macro f1?": 0.7012,
+                "What is the Winner_SCL RMSE?": 0.4708
+            },
+            {
+                "What is the Task1_Only macro f1?": 0.7012,
+                "What is the Winner_SCL RMSE?": 0.4708
+            },
+            {
+                "What is the Task1_Only macro f1?": 0.7012,
+                "What is the Winner_SCL RMSE?": 0.4708
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.6713286.v2"
+    },
+    {
+        "field": "Computer Science",
+        "language": "Python", 
+        "capsule_title": "Reshaping Reservoirs with Hebbian Plasticity:Unsupervised Adaptation that Works",
+        "capsule_id": "capsule-2545370",
+        "task_prompt": "Run all the 2.hag_explorator.ipynb and report on the generated html results.",
+        "results": [
+            {
+                "What is the number of audio files used?": 3000,
+                "What is the mean sampling rate": 8000
+            },
+            {
+                "What is the number of audio files used?": 3000,
+                "What is the mean sampling rate": 8000
+            },
+            {
+                "What is the number of audio files used?": 3000,
+                "What is the mean sampling rate": 8000
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.3241639.v1"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "R", 
+        "capsule_title": "Mortality impacts of rainfall and sea level rise in a developing megacity",
+        "capsule_id": "capsule-5558058",
+        "task_prompt": "Run the 1_run.R and report on the results.",
+        "results": [
+            {
+                "fig do Female or Male have a higher percentage of impact on deaths from daily rainfall?": "Female",
+                "fig during the monsoon season, do people aged 65+ or <5 years old have a higher death relative to January? Respond in `65+` or `<5`": "<5"
+            },
+            {
+                "fig do Female or Male have a higher percentage of impact on deaths from daily rainfall?": "Female",
+                "fig during the monsoon season, do people aged 65+ or <5 years old have a higher death relative to January? Respond in `65+` or `<5`": "<5"
+            },
+            {
+                "fig do Female or Male have a higher percentage of impact on deaths from daily rainfall?": "Female",
+                "fig during the monsoon season, do people aged 65+ or <5 years old have a higher death relative to January? Respond in `65+` or `<5`": "<5"
+            }
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.2076316.v2"
+    },
+    {
+        "field": "Social Sciences",
+        "language": "R", 
+        "capsule_title": "Replication materials for: Measuring Distances in High Dimensional Spaces Why Average Group Vector Comparisons Exhibit Bias, And What to Do About it",
+        "capsule_id": "capsule-0912480",
+        "task_prompt": "Run the main_run_scripts.R file and report on the generated output.",
+        "results": [
+            {
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
+            },
+            {
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
+            },
+            {
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
+            }
+            
+        ],
+        "capsule_doi": "https://doi.org/10.24433/CO.1397436.v1"
     }
 ]
