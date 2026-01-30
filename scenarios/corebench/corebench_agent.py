@@ -207,7 +207,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         if match:
             try:
                 keys = ast.literal_eval(match.group(1))
-                logger.info(f"Extracted expected dict keys: {keys}")
+                logger.debug(f"Extracted expected dict keys: {keys}")
                 return keys
             except (ValueError, SyntaxError) as e:
                 logger.warning(f"Failed to parse dict_keys: {e}")
@@ -369,7 +369,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 {"role": "user", "content": history_text},
                 {"role": "user", "content": post_text},
             ]
-            logger.info(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
+            logger.debug(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
         response = completion(**self._completion_kwargs(plan_messages))
         self._track_tokens(context_id, response)
         if not response.choices or not response.choices[0].message:
@@ -432,8 +432,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     # Generate and insert plan
                     plan_text = self._generate_plan(context.context_id, user_input, state, messages)
                     messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
-                    logger.info(f"Plan: {plan_text}")
-                    logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
+                    logger.debug(f"Plan: {plan_text}")
+                    logger.debug(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     state["last_planned_step"] = state["step_number"]
                     did_plan = True
 
@@ -622,7 +622,6 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                # logger.info("Response sent successfully")
                 
                 # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
