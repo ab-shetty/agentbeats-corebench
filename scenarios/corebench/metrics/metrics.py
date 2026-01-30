@@ -1,58 +1,6 @@
 """
 CoreBench Evaluation Metrics Module
-====================================
-
-This module provides metrics for evaluating the purple agent's performance
-on the CoreBench reproducibility benchmark. The benchmark (agentified for AgentBeats) tests
-whether agents can reproduce both the environment and results of published research papers.
-
-ACCURACY: 
-- Measures answer correctness
-- Are the submitted answers correct compared to ground truth? (does not care about how agent reached them)
-   - Numeric values: Uses 95% prediction intervals to handle run-to-run variance
-     in stochastic experiments (e.g., ML training with different random seeds).
-     The interval is computed using t-distribution: mean ± t(0.975, n-1) * std * sqrt(1 + 1/n)
-   - String values: Case-insensitive exact match after stripping whitespace
-   - List values: Element-wise exact comparison (order matters, types matter)
-
-    Ground Truth For Accuracy Evaluation (from core_test.json):
-    [
-        {"question1": 0.95, "question2": "label", ...},
-    ]
-
-METHODOLOGY SCORE:
-- Measures reproduction process fidelity (what makes this a reproducibility benchmark)
-- Measures whether the agent followed proper scientific reproduction methodology, reading documentation, 
-  executing code, handling errors, regardless of whether they got the correct final answer.
-    - Deterministically catches cases where the agent got the correct answer through shortcuts (non-reproduction) means
-      ex: extracting x-axis label from code instead of reproducing the graph).
-    - Differentiates "honest success" vs "shortcut success"
-
-TASK ADHERENCE:
-- LLM-as-Judge serves as a qualitative judgement of process. 
-    - Evaluates rule compliance, and problem-solving approach
-    - Assesses how well the agent understood and executed the task
-    - Returns qualitative assessment [excellent/good/fair/poor] + [strengths] & [weaknesses]
-    - Can be used as validation of the methodology score
-
-METHODOLOGY vs TASK ADHERENCE:
-These metrics are complementary, not redundant:
-
-    | Methodology (Deterministic)     | Task Adherence (LLM Judge)        |
-    |---------------------------------|-----------------------------------|
-    | WHAT did the agent do?          | HOW WELL did the agent do it?     |
-    | Read docs? (yes/no)             | Discovery efficiency (quality)    |
-    | Execution coverage (%)          | Core process quality              |
-    | Error recovery attempts (count) | Problem-solving quality           |
-    | Binary/quantitative signals     | Qualitative assessment + feedback |
-
-Methodology provides reproducible scoring; Task Adherence provides reasoning for debugging.
-
-EFFICIENCY: 
-- How resource-efficient was the agent's approach?
-   - Steps used vs maximum allowed
-   - Tool call count and execution time
-   - Protocol/format errors encountered
+===================================
 """
 
 from dataclasses import asdict
@@ -447,10 +395,11 @@ The agent must figure out how to run the code and reproduce results. It could do
 Understand the codebase → Execute the code → Debug errors if needed → Extract results
 
 ## Core Process Scoring Guide (50%)
-- **45-50**: Successfully executed code and extracted results
-- **30-44**: Executed code but didn't extract results, or partial execution
-- **15-29**: Explored codebase but never executed
-- **0-14**: No meaningful attempt
+Score based on highest milestone achieved:
+- **40-50**: Executed code AND extracted results (full success)
+- **25-39**: Executed code but results incomplete/missing
+- **10-24**: Attempted execution but script failed/crashed
+- **0-9**: Never attempted to run code
 
 ## Red Flags
 - Never attempted to run code
@@ -469,7 +418,7 @@ Read REPRODUCING.md instructions → Execute documented command → Handle error
 - **45-50**: Followed documented instructions and executed successfully
 - **30-44**: Found instructions but execution incomplete
 - **15-29**: Attempted execution without reading instructions
-- **0-14**: No execution attempt
+- **0-14**: Never attempted to run code
 
 ## Red Flags
 - Never attempted documented command
@@ -509,12 +458,10 @@ Task instruction: {task_prompt}
 Questions to answer:
 {questions}
 
-Documentation available:
 {capsule_docs}
 
 ## Execution Trace
-Tool calls: {tool_calls_count}, Command timeouts: {command_timeouts}
-{timeout_note}
+Tool calls: {tool_calls_count}
 
 Tool calls + results:
 {tool_interactions}
@@ -540,175 +487,67 @@ Assign scores: Core _/50, Problem _/25, Discovery _/15, Technical _/10
 ```
 """
 
-def _read_text_file_head_bytes(path: str, max_bytes: int) -> tuple[str, bool, int]:
+def _read_text_file_head_bytes(path: str, max_bytes: int) -> tuple[str, bool]:
+    """Read up to max_bytes from a file, returning (text, was_truncated)."""
     with open(path, "rb") as f:
         data = f.read(max_bytes + 1)
     truncated = len(data) > max_bytes
-    consumed = min(len(data), max_bytes)
     text = data[:max_bytes].decode("utf-8", errors="replace")
-    return text, truncated, consumed
-
-
-_README_FILENAME_RE = re.compile(r"^readme(?:\.[a-z0-9]+)?$", re.IGNORECASE)
-_INCLUDE_DOC_EXTENSIONS = {"", ".md", ".markdown", ".txt", ".rst"}
-_EXCLUDE_DOC_EXTENSIONS = {".pdf"}
-
-
-def _capsule_default_workspace_dir() -> str:
-    return os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "workspace"))
-
-
-def _discover_capsule_docs(env_dir: str, *, max_depth: int = 4) -> tuple[list[str], list[dict[str, str]]]:
-    """
-    Find README-like docs inside a staged capsule environment.
-
-    Returns:
-        (included_candidates, excluded_docs)
-    """
-    included: list[str] = []
-    excluded: list[dict[str, str]] = []
-
-    if not os.path.isdir(env_dir):
-        return [], []
-
-    skip_dirs = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-
-    for root, dirs, files in os.walk(env_dir):
-        rel_root = os.path.relpath(root, env_dir)
-        depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
-        if depth >= max_depth:
-            dirs[:] = []
-        else:
-            dirs[:] = [d for d in dirs if d not in skip_dirs]
-
-        for fname in files:
-            fname_lower = fname.lower()
-            is_reproducing = fname_lower == "reproducing.md"
-            is_readme = bool(_README_FILENAME_RE.match(fname))
-            if not (is_reproducing or is_readme):
-                continue
-
-            rel_path = fname if rel_root == "." else os.path.normpath(os.path.join(rel_root, fname))
-            ext = os.path.splitext(fname)[1].lower()
-
-            if ext in _EXCLUDE_DOC_EXTENSIONS:
-                excluded.append({"path": rel_path, "reason": f"excluded_extension:{ext}"})
-                continue
-            if ext not in _INCLUDE_DOC_EXTENSIONS:
-                excluded.append({"path": rel_path, "reason": f"unsupported_extension:{ext}"})
-                continue
-
-            included.append(rel_path)
-
-    def _sort_key(path: str) -> tuple[int, int, str]:
-        norm = path.replace("\\", "/")
-        lower = norm.lower()
-        name = os.path.basename(lower)
-        depth = 0 if "/" not in lower else lower.count("/")
-
-        if name == "reproducing.md":
-            group = 0
-        elif "/" not in lower and name.startswith("readme"):
-            group = 1
-        elif lower.startswith("code/") and name.startswith("readme"):
-            group = 2
-        elif lower.startswith("environment/") and name.startswith("readme"):
-            group = 3
-        else:
-            group = 4
-
-        return group, depth, lower
-
-    return sorted(set(included), key=_sort_key), excluded
+    return text, truncated
 
 
 def _build_capsule_docs(
     *,
-    workspace_dir: Optional[str] = None,
-    max_total_bytes: int = 12_000,
-    per_file_bytes: int = 6_000,
-    max_files: int = 4,
+    workspace_dir: str,
+    max_bytes: int = 10_000,
 ) -> str:
-    """Build capsule documentation string for LLM judge context.
-
-    Returns formatted string showing what README/doc files exist in the capsule
-    and their contents (truncated to fit budget).
     """
-    workspace_dir = (workspace_dir or "").strip()
-    if not workspace_dir:
-        workspace_dir = (os.environ.get("COREBENCH_WORKSPACE_DIR") or "").strip() or _capsule_default_workspace_dir()
+    Build documentation context for the LLM judge.
 
+    This function finds and formats capsule documentation (README files) for
+    insertion into the TASK_ADHERENCE_PROMPT at {capsule_docs}.
+
+    Returns:
+        Formatted markdown string, or empty string if no docs found.
+    """
     env_dir = os.path.join(workspace_dir, "environment")
 
-    docs, excluded = _discover_capsule_docs(env_dir)
-    if not docs and not excluded:
-        return ""
-
-    remaining = max_total_bytes
-    included_count = 0
-    skipped: list[str] = []
-    chunks: list[str] = []
-
-    for rel_path in docs:
-        if included_count >= max_files or remaining <= 0:
-            skipped.append(rel_path)
+    # start search in root and then code directory
+    for subdir in ("", "code"):
+        directory = os.path.join(env_dir, subdir) if subdir else env_dir
+        if not os.path.isdir(directory):
             continue
 
-        abs_path = os.path.join(env_dir, rel_path)
-        if not os.path.isfile(abs_path):
-            continue
+        for filename in os.listdir(directory):
+            lower = filename.lower()
+            # Match to inconsitent naming standards, ex README.md, readme.txt, README_CAPSULE.md, etc.
+            if lower.startswith("readme") and lower.endswith((".md", ".txt")):
+                abs_path = os.path.join(directory, filename)
+                rel_path = f"{subdir}/{filename}" if subdir else filename
+                # read file content
+                try:
+                    text, truncated = _read_text_file_head_bytes(abs_path, max_bytes)
+                except OSError:
+                    continue
+                
+                # format and return file content
+                suffix = "\n...[truncated]..." if truncated else ""
+                return f"## Capsule Docs (available to agent)\n\n### {rel_path}\n```\n{text}{suffix}\n```\n"
 
-        read_bytes = min(per_file_bytes, remaining)
-        try:
-            text, truncated, consumed = _read_text_file_head_bytes(abs_path, read_bytes)
-        except OSError:
-            continue
-
-        suffix = "\n...[truncated]..." if truncated else ""
-        chunks.append(f"### {rel_path}\n```\n{text}{suffix}\n```")
-        included_count += 1
-        remaining -= consumed
-
-    overview_lines: list[str] = []
-    overview_lines.append("## Capsule Docs (available to agent)")
-    if docs:
-        overview_lines.append("Docs discovered (README*/REPRODUCING.md):")
-        for rel_path in docs[:30]:
-            overview_lines.append(f"- {rel_path}")
-        if len(docs) > 30:
-            overview_lines.append(f"- ... ({len(docs) - 30} more)")
-    else:
-        overview_lines.append("**No documentation files found in this capsule.**")
-        overview_lines.append("Note: In hard mode, REPRODUCING.md is deleted but README.md files are preserved.")
-    if excluded:
-        overview_lines.append("Excluded docs:")
-        for item in excluded[:20]:
-            overview_lines.append(f"- {item.get('path')}: {item.get('reason')}")
-        if len(excluded) > 20:
-            overview_lines.append(f"- ... ({len(excluded) - 20} more)")
-    if skipped:
-        overview_lines.append("Not excerpted (budget):")
-        for rel_path in skipped[:20]:
-            overview_lines.append(f"- {rel_path}")
-        if len(skipped) > 20:
-            overview_lines.append(f"- ... ({len(skipped) - 20} more)")
-
-    overview = "\n".join(overview_lines) + "\n"
-    body = "\n\n".join(chunks)
-    return overview if not body else overview + "\n" + body + "\n"
+    return ""
 
 
 def _build_tool_interactions(
     tool_calls: list[dict[str, Any]],
     tool_results: list[dict[str, Any]],
     *,
-    max_interactions: int = 24,
-    max_result_chars: int = 1200,
-    max_args_chars: int = 700,
+    max_args_chars: int = 1200,
 ) -> str:
+    """Format tool calls and results as a string of all tool interactions for the LLM judge."""
     if not tool_calls:
         return "(No tool calls recorded)"
 
+    # Match results to calls by (turn, tool) key
     results_by_key: dict[tuple[Any, Any], dict[str, Any]] = {}
     for event in tool_results:
         key = (event.get("turn"), event.get("tool"))
@@ -735,29 +574,22 @@ def _build_tool_interactions(
             timed_out = result.get("timed_out", False)
             hint = result.get("hint")
             summary = str(result.get("summary", "") or "")
-            if len(summary) > max_result_chars:
-                summary = summary[:max_result_chars] + "\n... (truncated)"
 
-            lines.append(f"Result: exit_code={exit_code}, timed_out={timed_out}")
+            if timed_out:
+                lines.append("⚠️ Command timed out")
+            elif exit_code is not None and exit_code != 0:
+                lines.append(f"Exit code: {exit_code}")
             if summary.strip():
-                lines.append(f"Summary:\n{summary}")
+                lines.append(f"Output:\n{summary}")
             if hint:
-                lines.append(f"Evaluator hint shown to agent:\n{hint}")
+                lines.append(f"Hint: {hint}")
         else:
-            lines.append("Result: (missing tool_result event)")
+            lines.append("Output: (missing tool output)")
 
         return "\n".join(lines)
 
-    if len(pairs) <= max_interactions:
-        formatted = [_format_pair(call, result) for call, result in pairs]
-        return "\n\n".join(formatted)
-
-    head = 8
-    tail = max_interactions - head
-    formatted_head = [_format_pair(call, result) for call, result in pairs[:head]]
-    formatted_tail = [_format_pair(call, result) for call, result in pairs[-tail:]]
-    skipped = max(0, len(pairs) - max_interactions)
-    return "\n\n".join(formatted_head + [f"... ({skipped} tool interactions omitted) ..."] + formatted_tail)
+    formatted = [_format_pair(call, result) for call, result in pairs]
+    return "\n\n".join(formatted)
 
 
 def _calculate_score_from_components(component_scores: dict[str, str], fallback_score: float) -> float:
@@ -798,27 +630,12 @@ async def evaluate_task_adherence(
     submitted: dict[str, Any],
     tool_calls: Optional[list[dict[str, Any]]] = None,
     tool_results: Optional[list[dict[str, Any]]] = None,
-    workspace_dir: Optional[str] = None,
+    *,
+    workspace_dir: str,
     trace_event_callback: Optional[Callable[[dict[str, Any]], None]] = None,
-    judge_model: str = "nebius/openai/gpt-oss-120b",  # match DEFAULT_MODEL
-    command_timeouts: int = 0,
+    judge_model: str = "gpt-5-mini",
 ) -> TaskAdherenceMetrics:
-    """Use LLM-as-judge to evaluate task execution quality.
-
-    NOTE: Accuracy is intentionally NOT passed to the judge to avoid anchoring bias.
-    The judge should evaluate process fidelity independently of outcome correctness.
-    """
-    # Build timeout context note for fair judging
-    if command_timeouts > 0:
-        timeout_note = (
-            f"NOTE: {command_timeouts} command(s) hit the timeout limit. This is an infrastructure "
-            "constraint (e.g., slow Docker emulation on ARM64), not necessarily an agent error. "
-            "Consider this when evaluating - the agent may have used the correct approach but was "
-            "blocked by execution time limits."
-        )
-    else:
-        timeout_note = ""
-
+    """Use LLM-as-judge to evaluate task execution quality."""
     capsule_docs = _build_capsule_docs(workspace_dir=workspace_dir)
     tool_interactions = _build_tool_interactions(tool_calls or [], tool_results or [])
 
@@ -834,32 +651,19 @@ async def evaluate_task_adherence(
         capsule_docs=capsule_docs,
         domain_criteria=domain_criteria,
         tool_calls_count=tool_calls_count,
-        command_timeouts=command_timeouts,
-        timeout_note=timeout_note,
         tool_interactions=tool_interactions,
         has_answer="Yes" if submitted else "No",
     )
     
-    # Same API configuration logic as corebench_agent.py
-    api_base = (os.environ.get("COREBENCH_TEXT_API_BASE") or "").strip()
-    api_key = (os.environ.get("COREBENCH_TEXT_API_KEY") or "").strip()
-    
-    if api_base:
-        # Self-hosted mode: prepend openai/ for custom endpoint
-        model_name = judge_model
-        if not model_name.startswith("openai/"):
-            model_name = f"openai/{model_name}"
-        completion_kwargs = {
-            "model": model_name,
-            "api_base": api_base,
-            "api_key": api_key or "dummy",
-        }
-    else:
-        # Cloud mode: pass model to litellm as-is (provider prefix handles routing)
-        model_name = judge_model
-        completion_kwargs = {
-            "model": model_name,
-        }
+    # API configuration - match mcp_server.py pattern for OpenAI models
+    openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+
+    model_name = judge_model
+    completion_kwargs = {
+        "model": model_name,
+        "api_base": "https://api.openai.com/v1",
+        "api_key": openai_api_key,
+    }
     logger.debug(f"Task adherence judge using model={model_name}")
     
     if trace_event_callback is not None:
@@ -873,10 +677,8 @@ async def evaluate_task_adherence(
                     "task_prompt": task_prompt,
                     "questions": questions,
                     "tool_calls_count": tool_calls_count,
-                    "command_timeouts": command_timeouts,
-                    "timeout_note": timeout_note,
                     "has_answer": bool(submitted),
-                    "capsule_docs": capsule_docs,  # readme files
+                    "capsule_docs": capsule_docs,
                     "tool_interactions": tool_interactions,
                     "prompt": prompt,
                 }
@@ -899,8 +701,6 @@ async def evaluate_task_adherence(
                 trace_event_callback(
                     {
                         "type": "llm_judge_output",
-                        "flow": "judge -> green",
-                        "domain": domain,
                         "model": model_name,
                         "parsed": result,
                     }
@@ -927,8 +727,6 @@ async def evaluate_task_adherence(
                 trace_event_callback(
                     {
                         "type": "llm_judge_error",
-                        "flow": "judge -> green",
-                        "domain": domain,
                         "model": model_name,
                         "error": str(e),
                     }
@@ -1562,9 +1360,6 @@ def _extract_executed_scripts(
 def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: list[str], successful_execution: bool) -> float:
     """Compute what fraction of expected scripts were executed.
 
-    Handles special cases:
-    - Fuzzy matching for Jupyter notebooks with modified output names
-
     Args:
         expected_scripts: Scripts parsed from task_prompt
         executed_scripts: Scripts successfully executed
@@ -1818,9 +1613,9 @@ def _compute_methodology_score(
     if domain == "corebench_easy":
         # Full credit for reading files, penalty for execution attempts
         if not attempted_execution:
-            doc_read_score = 1.0  # Treat as "did the right thing"
+            doc_read_score = 1.0
         else:
-            penalty = -0.7  # Penalty brings score down to 0.3
+            penalty = -0.7 
 
     elif domain == "corebench_medium":
         if read_documentation:
@@ -1933,7 +1728,7 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
             "success": bool(e.success),
             "accuracy": float(e.accuracy.accuracy),
             "adherence": float(e.task_adherence.score),
-            "methodology_score": float(e.methodology_metrics.methodology_score) if e.methodology_metrics else None,
+            "methodology_score": round(float(e.methodology_metrics.methodology_score), 4) if e.methodology_metrics else None,
             "time_seconds": float(e.efficiency.time_seconds),
         }
         for e in evaluations

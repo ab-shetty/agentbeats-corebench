@@ -76,7 +76,6 @@ from scenarios.corebench.metrics.metrics import (
     _empty_accuracy_metrics,
 )
 from scenarios.corebench.metrics.models import (
-    _make_json_safe,
     TaskEvaluation,
     AggregateMetrics,
     MethodologyMetrics,
@@ -905,7 +904,7 @@ class CoreBenchEvaluator(GreenAgent):
         keep_traces = req.config.get("keep_traces", False)  # Whether to keep trace files after run
 
         # LLM-as-judge model
-        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "nebius/openai/gpt-oss-120b"
+        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "gpt-5-mini"
         judge_llm = req.config.get("judge_llm", default_judge_model) # if override in scenario.toml exists
 
         logger.info(f"=" * 80)
@@ -1163,8 +1162,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             # Write run summary to trace folder
             if run_trace_dir:
                 summary_path = run_trace_dir / f"run_summary_{run_id}.json"
-                # Apply rounding to avoid trailing numbers like 0.33333333333
-                aggregate_dict = _make_json_safe(asdict(aggregate)) if aggregate else None
+                aggregate_dict = asdict(aggregate) if aggregate else None
                 with open(summary_path, "w") as f:
                     json.dump({
                         "run_id": run_id,
@@ -1773,7 +1771,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             trace.add({
                 "type": "methodology_metrics",
                 "flow": "green -> trace",
-                "methodology_score": methodology_metrics.methodology_score,
+                "methodology_score": round(methodology_metrics.methodology_score, 4),
                 "read_documentation": methodology_metrics.read_documentation,
                 "docs_read": methodology_metrics.docs_read,
                 "read_target_script": methodology_metrics.read_target_script,
@@ -1784,26 +1782,26 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 "installed_dependencies": methodology_metrics.installed_dependencies,
                 "expected_scripts": methodology_metrics.expected_scripts,
                 "executed_scripts": methodology_metrics.executed_scripts,
-                "execution_coverage": methodology_metrics.execution_coverage,
+                "execution_coverage": round(methodology_metrics.execution_coverage, 4),
                 "stdout_captured": methodology_metrics.stdout_captured,
                 "stdout_total_bytes": methodology_metrics.stdout_total_bytes,
                 "error_recovery": {
                     "total_errors": methodology_metrics.error_recovery.total_errors,
                     "errors_recovered": methodology_metrics.error_recovery.errors_recovered,
-                    "recovery_rate": methodology_metrics.error_recovery.recovery_rate,
+                    "recovery_rate": round(methodology_metrics.error_recovery.recovery_rate, 4),
                     "consecutive_failures": methodology_metrics.error_recovery.consecutive_failures,
-                    "persistence_score": methodology_metrics.error_recovery.persistence_score,
+                    "persistence_score": round(methodology_metrics.error_recovery.persistence_score, 4),
                 },
                 "violations": methodology_metrics.violations,
                 "score_breakdown": {
                     "domain": methodology_metrics.score_breakdown.domain,
-                    "doc_read_score": methodology_metrics.score_breakdown.doc_read_score,
-                    "script_read_score": methodology_metrics.score_breakdown.script_read_score,
-                    "execution_coverage_score": methodology_metrics.score_breakdown.execution_coverage_score,
-                    "successful_execution_score": methodology_metrics.score_breakdown.successful_execution_score,
-                    "error_recovery_score": methodology_metrics.score_breakdown.error_recovery_score,
-                    "penalty": methodology_metrics.score_breakdown.penalty,
-                    "total": methodology_metrics.score_breakdown.total,
+                    "doc_read_score": round(methodology_metrics.score_breakdown.doc_read_score, 4),
+                    "script_read_score": round(methodology_metrics.score_breakdown.script_read_score, 4),
+                    "execution_coverage_score": round(methodology_metrics.score_breakdown.execution_coverage_score, 4),
+                    "successful_execution_score": round(methodology_metrics.score_breakdown.successful_execution_score, 4),
+                    "error_recovery_score": round(methodology_metrics.score_breakdown.error_recovery_score, 4),
+                    "penalty": round(methodology_metrics.score_breakdown.penalty, 4),
+                    "total": round(methodology_metrics.score_breakdown.total, 4),
                 } if methodology_metrics.score_breakdown else None,
             })
 
@@ -1821,7 +1819,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             workspace_dir=self._workspace_dir,
             trace_event_callback=trace_event_callback,
             judge_model=judge_llm,
-            command_timeouts=command_timeouts,
         )
         logger.info(f"   ✓ Adherence Score: {adherence_metrics.score:.2f}/1.0")
         if adherence_metrics.reasoning:
