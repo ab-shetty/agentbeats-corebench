@@ -742,7 +742,7 @@
         "language": "R",
         "capsule_title": "Automated Text Classification of News Articles: A Practical Guide",
         "capsule_id": "capsule-9240688",
-        "task_prompt": "Run the R analysis scripts in order (01-overlap-analysis.R through 10-binning-analysis.R, then a01 through a07 appendix scripts) using Rscript.",
+        "task_prompt": "Run the bash script 'run.sh'.",
         "results": [
             {
                 "fig From figure 3, report the accuracy % of SML.": 71,
@@ -981,7 +981,7 @@
         "language": "Python",
         "capsule_title": "NEURELIA — Scaled Model & Canonical Claims Verification Capsule (v3.0)",
         "capsule_id": "capsule-1796796",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the headline portfolio results.",
         "results": [
             {
                 "What is the median net savings in billions (B)?": 11.26,
@@ -1003,7 +1003,7 @@
         "language": "Python",
         "capsule_title": "SAGE Protocol v2.1 — Golden Erratum & Verification Capsule (v3.0)",
         "capsule_id": "capsule-4977619",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the output results.",
         "results": [
             {
                 "Implied per-capita median $ per person?": 6003.03,
@@ -1028,7 +1028,7 @@
         "language": "Python",
         "capsule_title": "A Predictive Analytics Framework for Early-Stage Thyroid Cancer Using ML",
         "capsule_id": "capsule-7800694",
-        "task_prompt": "Execute 'Thyroid Cancer Final Code.ipynb'. Save the results in html format in ../results. For all the runs, disable the cell execution timeout and allow errors.",
+        "task_prompt": "Run the run file and report on the generated html results.",
         "results": [
             {
                 "Which model has the highest Macro F1?": "CatBoost",
@@ -1050,7 +1050,7 @@
         "language": "Python",
         "capsule_title": "CATegorical and PHenotypic Image SyntHetic LearnING (CATphising): An Alternative to Federated Learning in Medical Imaging",
         "capsule_id": "capsule-6800638",
-        "task_prompt": "Run 'scripts/evaluate_IDH_classification_performance.py'.",
+        "task_prompt": "Run the run file and report on the output xlsx and ROC.png files.",
         "results": [
             {
                 "fig which method has the lowest AUC?": "CATphising",
@@ -1075,7 +1075,7 @@
         "language": "Python",
         "capsule_title": "The Sovereign Constitution Fabric (SNF) v2.0 — Reproducible Synthetic-Floor Capsule",
         "capsule_id": "capsule-8412128",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the result metrics.",
         "results": [
             {
                 "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
@@ -1097,7 +1097,7 @@
         "language": "R",
         "capsule_title": "From Faces to Politics: Vision-Language Models (Sometimes) Link Visual Demographic Characteristics to Ideological Labels",
         "capsule_id": "capsule-6791130",
-        "task_prompt": "Run the main R script '01_Main.R' using Rscript and copy outputs from 03_output/ to ../results/.",
+        "task_prompt": "Run the run file and report on the output results.",
         "results": [
             {
                 "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
@@ -1119,7 +1119,7 @@
         "language": "Python",
         "capsule_title": "Human Dignity Firewall v1.3 — Zero-Leakage Autonomy Engine for Manipulation Detection & Behavioral Integrity",
         "capsule_id": "capsule-2538444",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "How many Draconian human-dignity laws are there? Respond in integer": 4,
@@ -1144,7 +1144,7 @@
         "language": "Python",
         "capsule_title": "ZVIS v1.6 — Ultra-Audit & Verification Capsule",
         "capsule_id": "capsule-4020210",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "How many Draconian audit laws are there? Respond in integer": 5,
@@ -1169,7 +1169,7 @@
         "language": "Python",
         "capsule_title": "VERA-DNA v2.1 — Ultra-Golden Capsule",
         "capsule_id": "capsule-8514506",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "How many Draconian laws are there? Respond in integer": 5,
@@ -1194,7 +1194,7 @@
         "language": "Python",
         "capsule_title": "SIF — Golden Proof-Bundle Execution Capsule (v1.0)",
         "capsule_id": "capsule-5944340",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What are the 3 verification checks on the toy-case bundle?": "Quantiles match, SHA-256 digest matches, Toy Merkle root matches",
@@ -1216,7 +1216,7 @@
         "language": "Python",
         "capsule_title": "SPORTS.DNA — Golden SDK Execution Capsule (v1.1)",
         "capsule_id": "capsule-9398054",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "For this total payout period in appendix IV, the disability cohort falls short of its floor. Under the FairnessBudget logic, the shortfall is not treated as savings. What must be done instead for inclusion purpose?": "Escrow top-up required: 2.00 M USD",
@@ -1238,7 +1238,7 @@
         "language": "Python",
         "capsule_title": "DignityProof — Global Verifiability Capsule (v1.0)",
         "capsule_id": "capsule-7655932",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
@@ -1269,7 +1269,7 @@
         "language": "Python",
         "capsule_title": "Proactive and reactive construction of memory-based preferences",
         "capsule_id": "capsule-0625246",
-        "task_prompt": "Execute 'analyze_and_plot.ipynb'. Save the results in html format in ../results. For all the runs, disable the cell execution timeout and allow errors.",
+        "task_prompt": "Run the run file and report on the results.",
         "results": [
             {
                 "fig does Fan In or Fan Out has a higher decision reactivation?": "Fan In"
@@ -1288,7 +1288,7 @@
         "language": "Python",
         "capsule_title": "Bayesian Social Science Statistics: from the Very Beginning",
         "capsule_id": "capsule-8772484",
-        "task_prompt": "Run all 8 R scripts in R/ directory using Rscript (ch2-sim.R through ch9-case.study.R), then run all 8 Python scripts in Python/ directory using python (ch2-sim.py through ch9-case.study.py).",
+        "task_prompt": "Run the run file and report on the generated output.",
         "results": [
             {
                 "fig for glassdoor salary, was mean posterior or mean prior higher? ": "posterior"
@@ -1307,7 +1307,7 @@
         "language": "Python",
         "capsule_title": "Measured intrapatient radiomic variability as a predictor of treatment response in multi-metastatic soft tissue sarcoma patients (revised)",
         "capsule_id": "capsule-3030670",
-        "task_prompt": "Run 'mirvpipe.py'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "fig does high MIRV or low MIRV has a higher survival probability?": "low MIRV"
@@ -1326,7 +1326,7 @@
         "language": "Python",
         "capsule_title": "Boundary Complexity of (Sub-) Cortical Areas Predict Deep Brain Stimulation Outcomes in Parkinson's Disease",
         "capsule_id": "capsule-0732329",
-        "task_prompt": "Execute 'FeatureSelection_and_ClassificationLearning.ipynb'. Save the results in html format in ../results. For all the runs, disable the cell execution timeout and allow errors.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What is the final test result accuracy?": 0.7879,
@@ -1348,7 +1348,7 @@
         "language": "R",
         "capsule_title": "Unravelling the transcriptome of the human tuberculosis lesion and its clinical implications",
         "capsule_id": "capsule-9294029",
-        "task_prompt": "Run 'script1.R' using Rscript.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "fig what location has the lowest median enrichment score?": "H"
@@ -1367,7 +1367,7 @@
         "language": "R",
         "capsule_title": "custom code for: Predicting IVF live birth probabilities using live machine learning, center-specific models",
         "capsule_id": "capsule-6295990",
-        "task_prompt": "Run 'R_demo.R' using Rscript.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What is the LBP model ROC-AUC (weighted)": 0.7142857,
@@ -1389,7 +1389,7 @@
         "language": "R",
         "capsule_title": "VascularBC-ST: the code to analyze the Vascular microenvironment of Breast Cancer using Spatial Transcriptome",
         "capsule_id": "capsule-9477017",
-        "task_prompt": "Export the following R default packages: datasets,utils,grDevices,graphics,stats,methods. Run 'main.R' using Rscript.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": [
@@ -1417,7 +1417,7 @@
         "language": "Python",
         "capsule_title": "Codex Wall v4.0 — Encrypted Holo-Causality & Predictive Governance (Reproducible Capsule)",
         "capsule_id": "capsule-0201673",
-        "task_prompt": "Run 'run_all.sh'.",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What is the mean_gdp_gain_pct?": 0.9999005880537901,
@@ -1442,7 +1442,7 @@
         "language": "R",
         "capsule_title": "Preventing Sexual Violence -- A Behavioral Problem Without a Behaviorally-Informed Solution",
         "capsule_id": "capsule-3088870",
-        "task_prompt": "Render the 4 RMarkdown files in order (1-paper-descriptives.Rmd, 2-sv-meta.Rmd, 3-appendixes.Rmd, 4-exploratory-analyses.Rmd) using Rscript and rmarkdown::render().",
+        "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
@@ -1458,33 +1458,32 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Deep learning-enabled accurate assessment of gait impairments in Parkinson's disease using smartphone videos",
         "capsule_id": "capsule-0152700",
         "task_prompt": "Run the corresponding models and report on the generated output.",
         "results": [
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
             },
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
-            }, 
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            },
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
             }
-            
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.7700825.v1"
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "A motif preferred adenine base editor with minimal bystander and off-targets editing",
         "capsule_id": "capsule-2242462",
         "task_prompt": "Run the main.py file and report on the final outputs.",
@@ -1506,7 +1505,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "PM-Score-Net: A Disjoint-Label Multi-Task Learning Framework for Automated Continuous Severity Assessment of Myopic Maculopathy",
         "capsule_id": "capsule-3762736",
         "task_prompt": "Run all the eval scripts and report on the final outputs.",
@@ -1528,7 +1527,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Reshaping Reservoirs with Hebbian Plasticity:Unsupervised Adaptation that Works",
         "capsule_id": "capsule-2545370",
         "task_prompt": "Run all the 2.hag_explorator.ipynb and report on the generated html results.",
@@ -1550,7 +1549,7 @@
     },
     {
         "field": "Social Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Mortality impacts of rainfall and sea level rise in a developing megacity",
         "capsule_id": "capsule-5558058",
         "task_prompt": "Run the 1_run.R and report on the results.",
@@ -1572,24 +1571,23 @@
     },
     {
         "field": "Social Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Replication materials for: Measuring Distances in High Dimensional Spaces Why Average Group Vector Comparisons Exhibit Bias, And What to Do About it",
         "capsule_id": "capsule-0912480",
         "task_prompt": "Run the main_run_scripts.R file and report on the generated output.",
         "results": [
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             },
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             },
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             }
-            
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.1397436.v1"
     }

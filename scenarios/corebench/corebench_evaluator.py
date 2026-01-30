@@ -687,20 +687,14 @@ class CoreBenchEvaluator(GreenAgent):
         def _rel(abs_path: str) -> str:
             return os.path.relpath(abs_path, self._workspace_dir)
 
-        # MEDIUM/HARD: Remove ALL results directories (including nested ones)
-        # This prevents agents from finding pre-existing results in folders like
-        # code_and_result-of-0-degree-our-repeated/results/
+        # MEDIUM/HARD: Remove results
         if domain in ("corebench_medium", "corebench_hard"):
-            # Find all directories named "results" anywhere in the environment
-            for root, dirs, files in os.walk(env_dir):
-                if "results" in dirs:
-                    results_path = os.path.join(root, "results")
-                    rel_path = _rel(results_path)
-                    logger.info(f"Removing {rel_path}/ for {domain}")
-                    shutil.rmtree(results_path)
-                    deleted_files.append(f"{rel_path}/")
+            if os.path.isdir(results_dir):
+                logger.info(f"Removing results/ for {domain}")
+                shutil.rmtree(results_dir)
+                deleted_files.append("environment/results/")
 
-        # HARD: Remove REPRODUCING.md, environment/ and run scripts
+        # HARD: Remove REPRODUCING.md, environment/ and run scripts 
         if domain == "corebench_hard":
             paths_to_remove = [
                 os.path.join(env_dir, "REPRODUCING.md"),
@@ -1162,7 +1156,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             # Write run summary to trace folder
             if run_trace_dir:
                 summary_path = run_trace_dir / f"run_summary_{run_id}.json"
-                aggregate_dict = asdict(aggregate) if aggregate else None
                 with open(summary_path, "w") as f:
                     json.dump({
                         "run_id": run_id,
@@ -1171,7 +1164,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                         "num_tasks": len(resolved_task_ids),
                         "task_ids": [t["capsule_id"] for t in resolved_task_ids],
                         "model_used": model_used,
-                        "aggregate_metrics": aggregate_dict,
+                        "aggregate_metrics": asdict(aggregate) if aggregate else None,
                     }, f, indent=2, default=str)
                 logger.info(f"📄 Run summary written to: {summary_path}")
 
@@ -1417,7 +1410,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 )
                 continue
 
-            # Log what the agent requested (except FINAL_ANSWER, which has its own logger below)
+            # Log what the agent requested except for FINAL_ANSWER
             if action.name != RESPOND_ACTION_NAME:
                 logger.info(f"📤 Agent requested: {action.name}")
                 args_preview = json.dumps(action.arguments, indent=2, default=str)
@@ -1631,10 +1624,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.info(f"   {match} {key_display}")
             logger.info(f"      Expected:  {exp_str}")
             logger.info(f"      Submitted: {sub_str}")
-            # Show debug info if values look same but marked wrong (compare full values, not truncated)
-            if match == "✗" and str(expected_val).lower().strip() == str(submitted_val).lower().strip():
-                logger.info(f"      ⚠️ Debug: looks same after normalize! exp_repr={repr(expected_val)[:80]}, sub_repr={repr(submitted_val)[:80]}")
-
+           
         # Count command timeouts for task adherence context
         command_timeouts = sum(
             1 for r in tool_result_events
@@ -1643,7 +1633,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             or "timeout" in str(r.get("summary", "")).lower()
         )
 
-        # METHODOLOGY METRICS - Deterministic scoring based on observable agent behavior
+        # METHODOLOGY METRICS
         logger.info(f"2️⃣  Extracting methodology metrics...")
         methodology_metrics = extract_methodology_metrics(
             tool_calls=tool_call_events,

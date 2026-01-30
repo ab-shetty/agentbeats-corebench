@@ -240,7 +240,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 "messages": messages,
                 "api_base": TEXT_API_BASE,
                 "api_key": TEXT_API_KEY or "dummy",
-                "timeout": 600,
+                "timeout": 60,
             }
         else:
             # Pass model directly to litellm (provider prefix already in model name)
@@ -636,11 +636,10 @@ Example:
                     }
                     logger.info(f"Adding token metadata to FINAL_ANSWER: {tool_call['arguments']['_metadata']}")
 
-                # Attach pending plan to response so green agent can extract and trace it. 
-                # Flow: purple generates plan at PLANNING_INTERVAL → stores in state["pending_plan"]
-                #       → next tool call includes <plan>...</plan> block → extracted in green for tracing
+                # Attach plan to response so it can be added to traces
                 pending_plan = state.pop("pending_plan", None)
                 plan_block = f"<plan>\n{pending_plan}\n</plan>\n" if pending_plan else ""
+                # Always forward tool intent verbatim
                 formatted = plan_block + "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
                 logger.info(f"Sending tool call: {tool_call.get('name', 'unknown')}")
 
