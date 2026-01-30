@@ -10,7 +10,7 @@ qualitative assessment of how well the agent executed the task. It answers quest
 - How well did the agent handle obstacles and errors?
 - How efficiently did the agent work?
 
-The judge provides a score (0.0-1.0), reasoning, strengths, and weaknesses for debugging.
+The judge provides a score (0.0-1.0), reasoning, strengths, and weaknesses for improving purple agent performance.
 
 ## Overview
 
@@ -31,7 +31,7 @@ The judge provides a score (0.0-1.0), reasoning, strengths, and weaknesses for d
     │ DOMAIN_CRITERIA │    │     Build Judge Context         │
     │ [domain]        │───▶│  - Domain-specific criteria     │
     └─────────────────┘    │  - Capsule docs (README files)  │
-                           │  - Tool interactions (24 max)   │
+                           │  - Tool interactions (all)      │
                            └────────────────┬────────────────┘
                                             │
                                             ▼
@@ -51,6 +51,13 @@ The judge provides a score (0.0-1.0), reasoning, strengths, and weaknesses for d
                                  └─────────────────────┘
 ```
 
+## Judge Model
+
+The recommended judge model is `gpt-5-mini` based on consistency testing (see `LLM_JUDGE_CONSISTENCY.md`):
+- 22% higher mean scores than gpt-oss-120b
+- 56% lower variance
+- EXCELLENT consistency on all test capsules
+
 ## What the Judge Receives
 
 ```
@@ -66,32 +73,51 @@ The judge provides a score (0.0-1.0), reasoning, strengths, and weaknesses for d
 │     - e.g., ["Report the accuracy", "Report the F1 score"]      │
 │                                                                 │
 │  3. Capsule Docs                                                │
-│     - README files from workspace/environment/                  │
-│     - Up to 4 files, max 6KB each, 12KB total                   │
-│     - Shows what documentation was available                    │
+│     - First README found in root or code/ directory             │
+│     - Case-insensitive match (README.md, readme.txt, etc.)      │
+│     - Max 10KB per file                                         │
 │                                                                 │
 │  4. Domain-Specific Criteria                                    │
 │     - Injected from DOMAIN_CRITERIA[domain]                     │
-│     - Contains: workflow, scoring guide, red flags              │
 │                                                                 │
 │  5. Execution Stats                                             │
 │     - tool_calls_count: Number of tool calls made               │
-│     - command_timeouts: Commands that hit timeout               │
 │                                                                 │
-│  6. Tool Interactions                                           │
-│     - Up to 24 tool call/result pairs                           │
-│     - Truncated if more (8 head + 16 tail)                      │
-│     - Shows arguments, exit codes, summaries                    │
+│  6. Tool Interactions (see format below)                        │
+│     - All tool call/result pairs shown (system max: 40)         │
+│     - Arguments truncated at 1200 chars if needed               │
+│     - Results not truncated (MCP tools handle truncation)       │
 │                                                                 │
 │  7. Final Answer Status                                         │
 │     - Whether agent provided a final answer (yes/no)            │
 │                                                                 │
-│  NOT included (intentionally):                                  │
-│     - Accuracy/correctness (avoids anchoring bias)              │
-│     - Info about "deleted" files (judge can't verify)           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Tool Interaction Format
+
+Each tool call/result pair is formatted as:
+
+```
+[Turn N] tool_name
+Arguments:
+{
+  "command": "python script.py",
+  "other_arg": "value"
+}
+Exit code: 1                    <- only shown if non-zero (error)
+⚠️ Command timed out            <- only shown if timeout occurred
+Output:
+<tool output here>
+Hint: <evaluator hint>          <- only shown if hint was provided
+```
+
+- **Arguments**: JSON with indent=2, truncated at 1200 chars if needed
+- **Exit code**: Only shown for errors (non-zero), success is implicit
+- **Timeout**: Only shown when a command timed out
+- **Output**: Full tool result (MCP tools handle their own truncation)
+- **Hint**: Evaluator guidance shown to agent (e.g., "File read error...")
 
 ## Domain-Specific Criteria (Hard Mode)
 
@@ -136,10 +162,10 @@ Hard mode is the primary focus. The criteria injected for hard mode:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Core Process (50%)                                             │
-│    45-50: Successfully executed code and extracted results      │
-│    30-44: Executed but didn't extract, or partial execution     │
-│    15-29: Explored codebase but never executed                  │
-│     0-14: No meaningful attempt                                 │
+│   40-50: Executed code AND extracted results (full success)     │
+│   25-39: Executed code but results incomplete/missing           │
+│   10-24: Attempted execution but script failed/crashed          │ 
+│   0-9: Never attempted to run code                              │
 │                                                                 │
 │  Problem Solving (25%)                                          │
 │    20-25: Debugged errors and persisted                         │
@@ -186,29 +212,32 @@ Hard mode is the primary focus. The criteria injected for hard mode:
 
 ## Example Judge Output
 
+Real example from capsule-5507257 (hard mode):
+
 ```json
 {
-  "score": 0.6,
-  "reasoning": "The agent managed to locate the notebook and execute it
-    (Core Process 30/50), but never extracted the required values. It
-    attempted dependency installation but gave up when pip failed
-    (Problem Solving 12/25). Discovery was efficient - quickly found
-    the main script (Discovery 12/15). Technical execution was reasonable
-    but incomplete (Technical 6/10).",
+  "score": 0.68,
+  "reasoning": "The agent located the relevant script, inspected the README, and attempted to run the testing code. It identified missing dependencies, installed TensorFlow and Keras, and corrected data path strings. However, the script never completed successfully because TensorFlow could not be imported on the current platform, so no accuracy numbers were obtained.
+  **Core Process (32/50)** – Explored codebase, installed packages, edited file paths and launched script, but execution ended with import error.
+  **Problem Solving (18/25)** – Multiple attempts to resolve TensorFlow import issue demonstrate persistence, though final problem remained unsolved.**Discovery (11/15)** – README and script found quickly; also discovered data directory and necessary packages.
+  **Technical (7/10)** – Commands generally correct. Redundant install attempts slightly lower score.",
   "component_scores": {
-    "core_process": "30/50",
-    "problem_solving": "12/25",
-    "discovery": "12/15",
-    "technical": "6/10"
+    "core_process": "32/50",
+    "problem_solving": "18/25",
+    "discovery": "11/15",
+    "technical": "7/10"
   },
   "strengths": [
-    "Quickly identified the entry point script",
-    "Used appropriate execution command",
-    "Read README to understand project structure"
+    "Located and inspected the relevant script and README quickly",
+    "Identified missing dependencies and attempted to install them",
+    "Corrected file path issues to point at the data directory",
+    "Persisted through several error messages and tried alternative package versions"
   ],
   "weaknesses": [
-    "Did not extract or report the requested values",
-    "Gave up after pip install failed instead of debugging"
+    "Did not resolve the TensorFlow import failure on the aarch64 platform",
+    "Repeated redundant pip install commands without checking compatibility",
+    "Did not create or use a virtual environment to isolate package versions",
+    "Failed to produce the required accuracy metric"
   ]
 }
 ```
