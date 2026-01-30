@@ -404,11 +404,16 @@ class CoreBenchPurpleAgent(AgentExecutor):
         # Enforce max steps across the conversation
         if state["step_number"] > MAX_STEPS:
             logger.warning(f"Max steps ({MAX_STEPS}) reached, returning empty FINAL_ANSWER")
+            tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+            metadata = {
+                "model": self._get_effective_model_name(),
+                "input_tokens": tokens["input_tokens"],
+                "output_tokens": tokens["output_tokens"],
+            }
+            fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
             await event_queue.enqueue_event(
                 new_agent_text_message(
-                    "<json>\n"
-                    '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
-                    "</json>",
+                    "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
                     context_id=context.context_id,
                 )
             )
@@ -639,11 +644,16 @@ Example:
                 logger.error(f"Error type: {type(e).__name__}")
                 logger.debug(traceback.format_exc())
                 
+                tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+                metadata = {
+                    "model": self._get_effective_model_name(),
+                    "input_tokens": tokens["input_tokens"],
+                    "output_tokens": tokens["output_tokens"],
+                }
+                fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
                 await event_queue.enqueue_event(
                     new_agent_text_message(
-                        "<json>\n"
-                        '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
-                        "</json>",
+                        "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
                         context_id=context.context_id,
                     )
                 )
@@ -655,11 +665,16 @@ Example:
 
         # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
         logger.error("Exhausted max turns without producing a valid JSON tool call so returning empty FINAL_ANSWER")
+        tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+        metadata = {
+            "model": self._get_effective_model_name(),
+            "input_tokens": tokens["input_tokens"],
+            "output_tokens": tokens["output_tokens"],
+        }
+        fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
         await event_queue.enqueue_event(
             new_agent_text_message(
-                "<json>\n"
-                '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
-                "</json>",
+                "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
                 context_id=context.context_id,
             )
         )
