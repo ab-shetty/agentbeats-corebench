@@ -40,6 +40,7 @@ dependencies = [
     "gdown>=4.7.1",
     # Optional: Arize AX tracing (set ARIZE_API_KEY and ARIZE_SPACE_ID to enable)
     "arize-otel>=0.1.0",
+    "arize>=7.52.0",
 ]
 
 [project.scripts]

@@ -12,6 +12,7 @@ This agent:
 
 import argparse
 import json
+import ast
 import re
 import sys
 import os
@@ -65,7 +66,8 @@ TEXT_MODEL: str = DEFAULT_MODEL
 # Smolagents sets as 4(1.plan->act->observe 2.act->observe 3.act->observe 4.act->observe)
 # Number of action is counted in agentbeats, therefore planning interval is 4 
 PLANNING_INTERVAL = int((os.getenv("COREBENCH_PLANNING_INTERVAL") or "4").strip() or "4")
-# Max lines to show in plan logging summary 
+MAX_STEPS = int((os.getenv("COREBENCH_MAX_STEPS") or "40").strip() or "40")
+# Max lines to show in plan logging summary
 PLAN_LOG_MAX_LINES = int((os.getenv("COREBENCH_PLAN_LOG_MAX_LINES") or "12").strip() or "12")
 
 # =========================
@@ -135,6 +137,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         self.ctx_id_to_messages: dict[str, list[dict]] = {} # Conversation history
         self.ctx_id_to_state: dict[str, dict[str, int]] = {} # Step tracker
         self.ctx_id_to_tokens: dict[str, dict[str, int]] = {} # Token usage tracker
+        self.ctx_id_to_task_prompt: dict[str, str] = {} # Original task prompt
         self._planning_initial_template = ""
         self._planning_update_pre_template = ""
         self._planning_update_post_template = ""
@@ -158,6 +161,72 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self._planning_update_post_template = planning.get("update_plan_post_messages", "") or ""
         except Exception as e:
             logger.warning(f"Failed to load planning prompts from {prompts_file}: {e}")
+
+    def _check_if_giving_up(self, context_id: str, answer) -> tuple[bool, str]:
+        """Use the LLM to determine if the answer indicates giving up on the task."""
+        answer_str = str(answer)
+        check_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an evaluator determining if an agent's answer indicates giving up on a task.\n\n"
+                    "All tasks are possible to complete, and the agent should never give up by saying a task is "
+                    "impossible, unavailable, or not reproducible.\n\n"
+                    "Analyze the answer and determine if it indicates giving up (e.g., contains phrases like "
+                    "\"unobtainable\", \"unavailable\", \"NOT REPRODUCIBLE\", \"ERROR\", \"NOT FOUND\", "
+                    "\"unknown\", or null/empty values, or is an empty dict {}).\n\n"
+                    "Respond with ONLY \"GIVING_UP\" if the answer indicates giving up, "
+                    "or \"VALID_ATTEMPT\" if it appears to be a genuine attempt at solving the problem."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Analyze this answer to determine if the agent is giving up:\n\n{answer_str}",
+            },
+        ]
+        try:
+            response = completion(**self._completion_kwargs(check_messages))
+            self._track_tokens(context_id, response)
+            evaluation = (response.choices[0].message.content or "").strip()
+            logger.info(f"Giving-up check evaluation: {evaluation}")
+            is_giving_up = "GIVING_UP" in evaluation
+            if is_giving_up:
+                feedback = (
+                    "The answer indicates giving up on the task. "
+                    "All tasks are possible to complete. Please try a different approach."
+                )
+            else:
+                feedback = "The answer appears to be a genuine attempt."
+            return is_giving_up, feedback
+        except Exception as e:
+            logger.error(f"Error during giving-up check: {e}")
+            return False, f"Error during evaluation: {e}"
+
+    def _extract_dict_keys(self, prompt: str) -> Optional[list]:
+        """Extract dictionary keys from a dict_keys([...]) pattern in the task prompt."""
+        pattern = r"dict_keys\((\[.*?\])\)"
+        match = re.search(pattern, prompt)
+        if match:
+            try:
+                keys = ast.literal_eval(match.group(1))
+                logger.debug(f"Extracted expected dict keys: {keys}")
+                return keys
+            except (ValueError, SyntaxError) as e:
+                logger.warning(f"Failed to parse dict_keys: {e}")
+                return None
+        return None
+
+    def _validate_answer_keys(self, answer, expected_keys: list) -> Optional[str]:
+        """Validate that answer is a dict with exactly the expected keys. Returns error msg or None."""
+        if not isinstance(answer, dict):
+            return f"The submitted answer must be a dictionary with the following keys: {expected_keys}"
+        missing_keys = [key for key in expected_keys if key not in answer]
+        if missing_keys:
+            return f"The submitted answer is missing the following keys: {missing_keys}"
+        extra_keys = [key for key in answer if key not in expected_keys]
+        if extra_keys:
+            return f"The submitted answer contains extra keys: {extra_keys}. Expected keys: {expected_keys}"
+        return None
 
     def _completion_kwargs(self, messages: list[dict]) -> dict:
         """Build litellm.completion kwargs."""
@@ -288,8 +357,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 {"role": "system", "content": system_prompt},
             ]
         else:
-            #logger.info("Planning template: update_plan_pre_messages + update_plan_post_messages")
-            remaining_steps = max(0, 10 - state["step_number"])
+            logger.info("Planning template: update_plan_pre_messages + update_plan_post_messages")
+            remaining_steps = max(0, MAX_STEPS - state["step_number"])
             pre_template = self._planning_update_pre_template or ""
             post_template = self._planning_update_post_template or ""
             if not pre_template or not post_template:
@@ -302,7 +371,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 {"role": "user", "content": history_text},
                 {"role": "user", "content": post_text},
             ]
-            #logger.info(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
+            logger.debug(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
         response = completion(**self._completion_kwargs(plan_messages))
         self._track_tokens(context_id, response)
         if not response.choices or not response.choices[0].message:
@@ -348,11 +417,28 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self.ctx_id_to_messages[context.context_id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
+            self.ctx_id_to_task_prompt[context.context_id] = user_input
         # Get the current step (one planning per PLANNING_INTERVAL actions)
         state = self._ensure_state(context.context_id)
         logger.info(f"Number of steps: {state}")
         # Decide whether to insert a plan
         #logger.info(f"Insert plan decision: {self._insert_plan(state)}")
+
+        # Enforce max steps across the conversation
+        if state["step_number"] > MAX_STEPS:
+            logger.warning(f"Max steps ({MAX_STEPS}) reached, returning empty FINAL_ANSWER")
+            await event_queue.enqueue_event(
+                new_agent_text_message(
+                    "<json>\n"
+                    '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
+                    "</json>",
+                    context_id=context.context_id,
+                )
+            )
+            self.ctx_id_to_messages.pop(context.context_id, None)
+            self.ctx_id_to_state.pop(context.context_id, None)
+            self.ctx_id_to_tokens.pop(context.context_id, None)
+            return
 
         messages = self.ctx_id_to_messages[context.context_id]
         messages.append({"role": "user", "content": user_input})
@@ -369,9 +455,8 @@ class CoreBenchPurpleAgent(AgentExecutor):
                     # Generate and insert plan
                     plan_text = self._generate_plan(context.context_id, user_input, state, messages)
                     messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
-                    #logger.info(f"Plan: {plan_text}")
-                    #logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     self._log_plan_summary(plan_text)
+                    logger.debug(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     state["last_planned_step"] = state["step_number"]
                     state["pending_plan"] = plan_text # Store plan to attach to next tool response
                     did_plan = True
@@ -508,6 +593,39 @@ Example:
                     })
                     continue
 
+                # Check if FINAL_ANSWER indicates giving up
+                if tool_call.get("name") == "FINAL_ANSWER":
+                    answer_content = tool_call.get("arguments", {}).get("content")
+                    is_giving_up, feedback = self._check_if_giving_up(context.context_id, answer_content)
+                    if is_giving_up:
+                        logger.warning(f"FINAL_ANSWER rejected (giving up): {feedback}")
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Your answer was rejected: {feedback}\n\n"
+                                "All tasks are possible to complete. You must not give up. "
+                                "Try a completely different approach to find the answer. "
+                                "Respond with a tool call to continue working on the task."
+                            ),
+                        })
+                        continue
+
+                    # Validate dictionary keys if the task prompt contains dict_keys(...)
+                    task_prompt = self.ctx_id_to_task_prompt.get(context.context_id, "")
+                    expected_keys = self._extract_dict_keys(task_prompt)
+                    if expected_keys:
+                        key_error = self._validate_answer_keys(answer_content, expected_keys)
+                        if key_error:
+                            logger.warning(f"FINAL_ANSWER rejected (key validation): {key_error}")
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"Your answer was rejected: {key_error}\n\n"
+                                    "Please fix your answer and resubmit with the correct dictionary format."
+                                ),
+                            })
+                            continue
+
                 # Add token metadata for FINAL_ANSWER
                 if tool_call.get("name") == "FINAL_ANSWER":
                     tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
@@ -532,7 +650,6 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                # logger.info("Response sent successfully")
                 
                 # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
@@ -540,6 +657,7 @@ Example:
                     self.ctx_id_to_messages.pop(context.context_id, None)
                     self.ctx_id_to_state.pop(context.context_id, None)
                     self.ctx_id_to_tokens.pop(context.context_id, None)
+                    self.ctx_id_to_task_prompt.pop(context.context_id, None)
                 else:
                     state["step_number"] += 1
                 return
