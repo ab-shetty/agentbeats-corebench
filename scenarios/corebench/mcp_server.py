@@ -172,14 +172,14 @@ def inspect_file_as_text(file_path: str, question: Optional[str] = None) -> str:
         
         # For zip files or if no question, return raw content
         if ".zip" in file_path or not question:
-            return result.text_content[:5000]
-        
+            return result.text_content[:20000]
+
         # If question provided and content is short, return with context
-        if len(result.text_content) < 4000:
+        if len(result.text_content) < 20000:
             return f"Question: {question}\n\nDocument content:\n{result.text_content}"
-        
+
         # For longer documents with questions, return truncated content with question
-        return f"Question: {question}\n\nDocument: {result.title or 'Untitled'}\n\n{result.text_content[:5000]}...\n\n(Content truncated. Please ask specific questions about sections of interest.)"
+        return f"Question: {question}\n\nDocument: {result.title or 'Untitled'}\n\n{result.text_content[:20000]}...\n\n(Content truncated. Please ask specific questions about sections of interest.)"
     
     except Exception as e:
         return f"Error reading file: {str(e)}"
