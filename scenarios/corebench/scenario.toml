@@ -1,6 +1,7 @@
 [green_agent]
 endpoint = "http://127.0.0.1:9009"
 cmd = "python scenarios/corebench/corebench_evaluator.py --host 127.0.0.1 --port 9009"
+judge_llm = "gpt-5-mini"
 
 [[participants]]
 role = "agent"
