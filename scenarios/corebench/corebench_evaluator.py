@@ -1617,14 +1617,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.debug(f"   {match} {key_display}")
             logger.debug(f"      Expected:  {exp_str}")
             logger.debug(f"      Submitted: {sub_str}")
-
-        
-        #  REPRODUCIBILITY
-        reproducibility_metrics: Optional[ReproducibilityMetrics] = None
-        if check_reproducibility:
-            reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
-            status = "✅" if reproducibility_metrics.success else "❌"
-            logger.info(f"   Reproducibility: {status} {reproducibility_metrics.reason}")
             
         # Count command timeouts for task adherence context
         command_timeouts = sum(
