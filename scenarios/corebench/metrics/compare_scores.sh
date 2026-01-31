@@ -37,7 +37,7 @@ fi
 tmp_old=$(mktemp)
 tmp_new=$(mktemp)
 
-# Extract metrics: capsule, accuracy, written_acc, vision_acc, adherence, methodology, steps, tools, time_sec, success
+# Extract metrics: capsule, accuracy, written_acc, vision_acc, adherence, methodology, success
 extract() {
   local dir="$1" out="$2"
   grep -h '"type": "evaluation"' "$dir"/*.jsonl | \
@@ -47,9 +47,6 @@ extract() {
             (.evaluation.accuracy.vision_accuracy // 0),
             .evaluation.task_adherence.score,
             (.evaluation.methodology_metrics.methodology_score // 0),
-            (.evaluation.efficiency.steps_used // 0),
-            (.evaluation.efficiency.tool_calls // .evaluation.efficiency.tool_calls_count // 0),
-            (.evaluation.efficiency.time_seconds // 0),
             (.evaluation.success // false)
            ] | @csv' | sort > "$out"
 }
@@ -68,7 +65,7 @@ join -t',' "$tmp_old" "$tmp_new" | \
   awk -F',' '{
     capsule = substr($1, 2, length($1)-2);
     acc_o=$2; adh_o=$5; meth_o=$6;
-    acc_n=$10; adh_n=$13; meth_n=$14;
+    acc_n=$8; adh_n=$11; meth_n=$12;
     printf "%-30s %.2f  %.2f  %.2f  →  %.2f  %.2f  %.2f  %+.2f  %+.2f  %+.2f\n",
       capsule, acc_o, adh_o, meth_o, acc_n, adh_n, meth_n, adh_n-adh_o, acc_n-acc_o, meth_n-meth_o;
   }'
@@ -77,7 +74,7 @@ echo ""
 echo "SUMMARY"
 echo "-------"
 join -t',' "$tmp_old" "$tmp_new" | \
-  awk -F',' '{d_adh+=($13-$5); d_acc+=($10-$2); d_meth+=($14-$6); c++}
+  awk -F',' '{d_adh+=($11-$5); d_acc+=($8-$2); d_meth+=($12-$6); c++}
              END {if(c==0){print "No overlapping capsules."} else {
                printf "Capsules compared: %d\nAvg ΔAdh: %+.3f\nAvg ΔAcc: %+.3f\nAvg ΔMeth: %+.3f\n", c, d_adh/c, d_acc/c, d_meth/c
              }}'

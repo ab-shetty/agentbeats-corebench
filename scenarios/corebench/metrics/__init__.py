@@ -8,7 +8,6 @@ from scenarios.corebench.metrics.models import (
     ErrorRecoveryMetrics,
     MethodologyScoreBreakdown,
     MethodologyMetrics,
-    EfficiencyMetrics,
     TaskEvaluation,
     AggregateMetrics,
 )
@@ -17,7 +16,6 @@ from scenarios.corebench.metrics.models import (
 from scenarios.corebench.metrics.metrics import (
     evaluate_accuracy,
     evaluate_task_adherence,
-    compute_efficiency,
     aggregate_results,
     extract_methodology_metrics,
     _empty_accuracy_metrics,
@@ -31,13 +29,11 @@ __all__ = [
     "ErrorRecoveryMetrics",
     "MethodologyScoreBreakdown",
     "MethodologyMetrics",
-    "EfficiencyMetrics",
     "TaskEvaluation",
     "AggregateMetrics",
     # Functions
     "evaluate_accuracy",
     "evaluate_task_adherence",
-    "compute_efficiency",
     "aggregate_results",
     "extract_methodology_metrics",
     "_empty_accuracy_metrics",

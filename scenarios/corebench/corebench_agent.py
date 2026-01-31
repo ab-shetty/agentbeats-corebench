@@ -348,7 +348,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
         """Generate a plan using initial or update planning prompts."""
         # Decide which planning template to use - initial or update(pre+post)
         if state["step_number"] == 1:
-            #logger.info("Planning template: initial_plan")
             plan_prompt = self._planning_initial_template or ""
             if not plan_prompt:
                 return "Plan unavailable."
@@ -422,7 +421,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
         state = self._ensure_state(context.context_id)
         logger.info(f"Number of steps: {state}")
         # Decide whether to insert a plan
-        #logger.info(f"Insert plan decision: {self._insert_plan(state)}")
 
         # Enforce max steps across the conversation
         if state["step_number"] > MAX_STEPS:
@@ -453,7 +451,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
         did_plan = False
         for turn in range(max_turns):
-            #logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
                 # Insert plan if it is the right step
                 if not did_plan and self._insert_plan(state):
