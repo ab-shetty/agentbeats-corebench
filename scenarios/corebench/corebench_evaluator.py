@@ -1051,7 +1051,6 @@ class CoreBenchEvaluator(GreenAgent):
             logger.info(f"   - Execution Attempt Rate: {aggregate.execution_attempt_rate:.1%}")
             logger.info(f"   - Successful Execution Rate: {aggregate.successful_execution_rate:.1%}")
             logger.info(f"   - Mean Error Recovery Rate: {aggregate.mean_error_recovery_rate:.1%}")
-            logger.info(f"⚡ Avg Steps: {aggregate.mean_steps:.1f}")
 
             # Build result data for leaderboard
             result_data = {
@@ -1074,10 +1073,6 @@ class CoreBenchEvaluator(GreenAgent):
                 "successful_execution_rate": aggregate.successful_execution_rate,
                 "mean_error_recovery_rate": aggregate.mean_error_recovery_rate,
 
-                # Efficiency
-                "mean_steps": aggregate.mean_steps,
-                "mean_tool_calls": aggregate.mean_tool_calls,
-                "mean_time": aggregate.mean_time,
                 "total_time": time_used,
                 "used_mcp": use_mcp,
 
@@ -1121,10 +1116,7 @@ Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_
 
 📋 Task Adherence (LLM Judge): {aggregate.mean_adherence:.2f}/1.0
 
-⚡ Efficiency:
-  Avg Steps: {aggregate.mean_steps:.1f}
-  Avg Tool Calls: {aggregate.mean_tool_calls:.1f}
-  Total Time: {time_used:.1f}s
+⚡ Total Time: {time_used:.1f}s
 {cost_line}
 📋 Task Results:
 {task_results_str}
