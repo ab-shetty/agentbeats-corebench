@@ -66,17 +66,19 @@ from shared_logging import setup_logging
 # Import metrics module
 from scenarios.corebench.metrics.metrics import (
     evaluate_accuracy,
-    evaluate_reproducibility,
     evaluate_task_adherence,
     compute_efficiency,
     aggregate_results,
+    extract_methodology_metrics,
     AccuracyMetrics,
-    ReproducibilityMetrics,
     TaskAdherenceMetrics,
     EfficiencyMetrics,
+    _empty_accuracy_metrics,
+)
+from scenarios.corebench.metrics.models import (
     TaskEvaluation,
     AggregateMetrics,
-    _empty_accuracy_metrics,
+    MethodologyMetrics,
 )
 
 from model_prices import MODEL_PRICES_DICT
@@ -162,15 +164,22 @@ class ExecutionTraceWriter:
         self.close()
         return None  # Don't suppress exceptions
 
+    # Fields that should NOT be truncated (needed for checking llm as a judge reproducibility)
+    _NO_TRUNCATE_KEYS = {"prompt"}
+
     @staticmethod
-    def _truncate(value: Any, *, limit: int = 4000) -> Any:
+    def _truncate(value: Any, *, limit: int = 4000, key: str = "") -> Any:
         """Recursively truncate long strings in nested structures."""
         if isinstance(value, str) and len(value) > limit:
             return value[:limit] + f"... (truncated, original_len={len(value)})"
         if isinstance(value, list):
             return [ExecutionTraceWriter._truncate(v, limit=limit) for v in value]
         if isinstance(value, dict):
-            return {k: ExecutionTraceWriter._truncate(v, limit=limit) for k, v in value.items()}
+            return {
+                k: v if k in ExecutionTraceWriter._NO_TRUNCATE_KEYS
+                else ExecutionTraceWriter._truncate(v, limit=limit, key=k)
+                for k, v in value.items()
+            }
         return value
 
     def add(self, event: dict[str, Any], *, truncate: bool = True) -> None:
@@ -664,14 +673,13 @@ class CoreBenchEvaluator(GreenAgent):
         os.makedirs(self._workspace_dir, exist_ok=True)
         logger.debug("Workspace reset complete")
     
-    def _apply_difficulty_filters(self, domain: str) -> tuple[bool, list[str]]:
+    def _apply_difficulty_filters(self, domain: str) -> list[str]:
         """
         Remove files based on difficulty level.
 
         Returns:
-            Tuple of (results_removed: bool, deleted_files: list[str])
+            List of deleted file/directory paths (relative to workspace)
         """
-        removed_results = False
         deleted_files: list[str] = []
         env_dir = os.path.join(self._workspace_dir, "environment")
         results_dir = os.path.join(env_dir, "results")
@@ -684,10 +692,9 @@ class CoreBenchEvaluator(GreenAgent):
             if os.path.isdir(results_dir):
                 logger.info(f"Removing results/ for {domain}")
                 shutil.rmtree(results_dir)
-                removed_results = True
                 deleted_files.append("environment/results/")
 
-        # HARD: Remove REPRODUCING.md, environment/ and run scripts
+        # HARD: Remove REPRODUCING.md, environment/ and run scripts 
         if domain == "corebench_hard":
             paths_to_remove = [
                 os.path.join(env_dir, "REPRODUCING.md"),
@@ -714,7 +721,7 @@ class CoreBenchEvaluator(GreenAgent):
         else:
             logger.info(f"No files matched for deletion")
 
-        return removed_results, deleted_files
+        return deleted_files
     
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         """
@@ -855,6 +862,16 @@ class CoreBenchEvaluator(GreenAgent):
         msg += "Please continue with your task."
         return msg
 
+    def _format_methodology_score(self, score: Optional[float]) -> str:
+        """Format a per-task methodology score for display, handling missing values."""
+        if score is None:
+            return "N/A"
+        try:
+            return f"{score:.2f}"
+        except (TypeError, ValueError):
+            logger.warning("Unexpected methodology_score value %r; treating as N/A", score)
+            return "N/A"
+
 
     async def run_eval(self, req: EvalRequest, updater: TaskUpdater) -> None:
         """
@@ -881,7 +898,7 @@ class CoreBenchEvaluator(GreenAgent):
         keep_traces = req.config.get("keep_traces", False)  # Whether to keep trace files after run
 
         # LLM-as-judge model
-        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "nebius/openai/gpt-oss-120b"
+        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "gpt-5-mini"
         judge_llm = req.config.get("judge_llm", default_judge_model) # if override in scenario.toml exists
 
         logger.info(f"=" * 80)
@@ -932,7 +949,6 @@ class CoreBenchEvaluator(GreenAgent):
         # Collect all task evaluations and cost metadata
         task_evaluations: list[TaskEvaluation] = []
         task_cost_metadata: list[Optional[Dict[str, Any]]] = []
-        track_restoration = domain in ("corebench_medium", "corebench_hard")
 
         try:
             for idx, task in enumerate(resolved_task_ids, 1):
@@ -966,6 +982,10 @@ class CoreBenchEvaluator(GreenAgent):
                     logger.info(f"   Accuracy: {task_evaluation.accuracy.accuracy:.1%} ({task_evaluation.accuracy.correct_answers}/{task_evaluation.accuracy.total_questions})")
                     logger.info(f"   Task Adherence: {task_evaluation.task_adherence.score:.2f}/1.0")
                     logger.info(f"   Steps: {task_evaluation.efficiency.steps_used}/{max_steps}")
+                    # Show violations prominently if any
+                    if task_evaluation.methodology_metrics and task_evaluation.methodology_metrics.violations:
+                        violations_str = ', '.join(task_evaluation.methodology_metrics.violations)
+                        logger.info(f"   ⚠️ Violations: {violations_str}")
 
                 except Exception as e:
                     logger.error(f"❌ Task {task_id} failed: {e}")
@@ -987,9 +1007,8 @@ class CoreBenchEvaluator(GreenAgent):
                         domain=domain,
                         success=False,
                         accuracy=_empty_accuracy_metrics(),
-                        reproducibility=None,
                         task_adherence=TaskAdherenceMetrics(
-                            score=0.0, followed_instructions=False, navigation_quality="na",
+                            score=0.0,
                             reasoning=f"Task failed: {e}", strengths=[], weaknesses=["Task execution failed"]
                         ),
                         efficiency=EfficiencyMetrics(
@@ -1041,15 +1060,11 @@ class CoreBenchEvaluator(GreenAgent):
             logger.info(f"✅ Success Rate: {aggregate.num_successful}/{aggregate.num_tasks} ({aggregate.pass_rate:.1%})")
             logger.info(f"📊 Mean Accuracy: {aggregate.mean_accuracy:.1%}")
             logger.info(f"📋 Mean Task Adherence: {aggregate.mean_adherence:.2f}/1.0")
-
-            if track_restoration:
-                num_reproduced = sum(
-                    1 for t in task_evaluations 
-                    if t.reproducibility and t.reproducibility.success
-                )
-                reproduction_rate = num_reproduced / len(task_evaluations) if task_evaluations else 0
-                logger.info(f"🔬 Reproducability Rate: {num_reproduced}/{len(task_evaluations)} ({reproduction_rate:.1%})")
-
+            logger.info(f"🔧 Mean Methodology Score: {aggregate.mean_methodology_score:.2f}/1.0")
+            logger.info(f"   - Doc Read Rate: {aggregate.doc_read_rate:.1%}")
+            logger.info(f"   - Execution Attempt Rate: {aggregate.execution_attempt_rate:.1%}")
+            logger.info(f"   - Successful Execution Rate: {aggregate.successful_execution_rate:.1%}")
+            logger.info(f"   - Mean Error Recovery Rate: {aggregate.mean_error_recovery_rate:.1%}")
             logger.info(f"⚡ Avg Steps: {aggregate.mean_steps:.1f}")
 
             # Build result data for leaderboard
@@ -1064,8 +1079,16 @@ class CoreBenchEvaluator(GreenAgent):
                 "mean_accuracy": aggregate.mean_accuracy,
                 "mean_written_accuracy": aggregate.mean_written_accuracy,
                 "mean_vision_accuracy": aggregate.mean_vision_accuracy,
-                "mean_restoration_rate": aggregate.mean_restoration_rate,
                 "mean_adherence": aggregate.mean_adherence,
+
+                # Methodology metrics (deterministic)
+                "mean_methodology_score": aggregate.mean_methodology_score,
+                "doc_read_rate": aggregate.doc_read_rate,
+                "execution_attempt_rate": aggregate.execution_attempt_rate,
+                "successful_execution_rate": aggregate.successful_execution_rate,
+                "mean_error_recovery_rate": aggregate.mean_error_recovery_rate,
+
+                # Efficiency
                 "mean_steps": aggregate.mean_steps,
                 "mean_tool_calls": aggregate.mean_tool_calls,
                 "mean_time": aggregate.mean_time,
@@ -1085,13 +1108,10 @@ class CoreBenchEvaluator(GreenAgent):
             # Format task results for display
             task_results_str = "\n".join(
                 f"  {tid}: {'✅' if info['success'] else '❌'} "
-                f"(acc={info['accuracy']:.1%})"
+                f"(acc={info['accuracy']:.1%}, "
+                f"process={self._format_methodology_score(info.get('methodology_score'))})"
                 for tid, info in aggregate.task_results.items()
             )
-
-            restoration_line = ""
-            if aggregate.mean_restoration_rate is not None:
-                restoration_line = f"Reproducibility: {aggregate.mean_restoration_rate:.1%}\n"
 
             cost_line = ""
             if cost_efficiency is not None:
@@ -1102,10 +1122,18 @@ class CoreBenchEvaluator(GreenAgent):
 Domain: {domain}
 Tasks: {aggregate.num_successful}/{aggregate.num_tasks} passed ({aggregate.pass_rate:.1%})
 
-📊 Metrics:
-  Accuracy: {aggregate.mean_accuracy:.1%} (written: {aggregate.mean_written_accuracy:.1%}, vision: {aggregate.mean_vision_accuracy:.1%})
-  Task Adherence: {aggregate.mean_adherence:.2f}
-  {restoration_line}
+📊 Accuracy Metrics:
+  Accuracy: {aggregate.mean_accuracy:.1%}
+  Written: {aggregate.mean_written_accuracy:.1%}, Vision: {aggregate.mean_vision_accuracy:.1%}
+
+🔧 Methodology Metrics (Deterministic):
+  Methodology Score: {aggregate.mean_methodology_score:.2f}/1.0
+  Doc Read Rate: {aggregate.doc_read_rate:.1%}
+  Execution Attempt Rate: {aggregate.execution_attempt_rate:.1%}
+  Successful Execution Rate: {aggregate.successful_execution_rate:.1%}
+  Error Recovery Rate: {aggregate.mean_error_recovery_rate:.1%}
+
+📋 Task Adherence (LLM Judge): {aggregate.mean_adherence:.2f}/1.0
 
 ⚡ Efficiency:
   Avg Steps: {aggregate.mean_steps:.1f}
@@ -1171,7 +1199,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         This method orchestrates the full task lifecycle:
         1. Setup workspace and download capsule
         2. Interact with purple agent (tool calls loop)
-        3. Evaluate all metrics (accuracy, reproducibility, adherence, efficiency)
+        3. Evaluate all metrics (accuracy, methodology, adherence, efficiency)
         4. Cleanup and return structured evaluation
 
         Args:
@@ -1262,16 +1290,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.debug(f"Renaming {capsule_path} to {env_dir}")
             os.rename(capsule_path, env_dir)
 
-        # Apply difficulty filters (and remember what we removed for restoration metrics).
-        check_reproducibility, deleted_files = self._apply_difficulty_filters(domain)
+        # Apply difficulty filters
+        deleted_files = self._apply_difficulty_filters(domain)
 
-        # Add trace event for deleted files (useful for debugging judge decisions)
+        # Add trace event for deleted files
         if trace and deleted_files:
             trace.add({
                 "type": "difficulty_filter",
-                "domain": domain,
                 "deleted_files": deleted_files,
-                "note": "These files were deleted before the agent started. Agent cannot read them.",
             })
 
         # Initialize MCP client after staging so PWD is workspace/environment
@@ -1291,12 +1317,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 logger.error(f"Failed to initialize MCP: {e}")
                 raise
 
-        # Snapshot capsule state (after difficulty filters) for reproducibility debugging.
-        workspace_snapshot_skip_dirs = {
-            ".git", "__pycache__", ".pytest_cache", ".mypy_cache",
-            ".venv", "venv", "env", "node_modules", ".ruff_cache", "tool_outputs",
-        }
-
         # Build the initial task description for the purple agent
         task_description = self._build_task_prompt(task, domain, use_mcp)
 
@@ -1315,18 +1335,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
         while not terminated and steps_used < max_steps: # Prevent infinite loops
             turn = steps_used + 1
-            if trace:
-                trace.add(
-                    {
-                        "type": "agent_prompt",
-                        "flow": "green -> purple",
-                        "turn": turn,
-                        "message": next_message,
-                        "new_conversation": is_first_message,
-                    }
-                )
             logger.debug(f"Sending to purple agent (first_message={is_first_message})")
-
+            
             try:
                 response = await self._tool_provider.talk_to_agent(
                     message=next_message,
@@ -1342,15 +1352,19 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
             is_first_message = False
             steps_used += 1
-            if trace:
-                trace.add(
-                    {
-                        "type": "agent_response",
-                        "flow": "purple -> green",
-                        "turn": steps_used,
-                        "raw_response": response,
-                    }
-                )
+
+            # Extract and trace "plan" if present
+            plan_match = re.search(r'<plan>\n?(.*?)\n?</plan>', response, re.DOTALL)
+            if plan_match:
+                if trace:
+                    trace.add({
+                        "type": "plan",
+                        "flow": "purple -> trace",
+                        "turn": turn,
+                        "content": plan_match.group(1).strip(),
+                    })
+                # Remove plan block so _parse_and_execute_tools only sees JSON
+                response = response.replace(plan_match.group(0), "").strip()
 
             try:
                 action, tool_result = await self._parse_and_execute_tools(response, use_mcp)
@@ -1396,12 +1410,13 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 )
                 continue
 
-            # Log what the agent requested
-            logger.info(f"📤 Agent requested: {action.name}")
-            args_preview = json.dumps(action.arguments, indent=2, default=str)
-            if len(args_preview) > 500:
-                args_preview = args_preview[:500] + "\n   ... (truncated)"
-            logger.info(f"   Arguments: {args_preview}")
+            # Log what the agent requested except for FINAL_ANSWER
+            if action.name != RESPOND_ACTION_NAME:
+                logger.info(f"📤 Agent requested: {action.name}")
+                args_preview = json.dumps(action.arguments, indent=2, default=str)
+                if len(args_preview) > 500:
+                    args_preview = args_preview[:500] + "\n   ... (truncated)"
+                logger.info(f"   Arguments: {args_preview}")
 
             if tool_result is not None:
                 result_preview = tool_result[:300] + "..." if len(tool_result) > 300 else tool_result
@@ -1429,8 +1444,8 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     # Show truncated output (first 3 lines)
                     output_lines = tool_result.split('\n')
                     if len(output_lines) > 5:
-                        preview = '\n'.join(output_lines[:3])
-                        #logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
+                        preview = '\n'.join(output_lines[:5])
+                        logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
                     elif tool_result.strip():
                         logger.info(f"   Output: {tool_result[:200]}")
                         
@@ -1496,11 +1511,11 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     logger.warning(f"FINAL_ANSWER missing content; proceeding with empty answer")
                     answer = {}
                 
-                logger.info(f"FINAL ANSWER type: {type(answer)}")
-                logger.info(f"FINAL ANSWER: {answer}")
-                
+                # Single consolidated FINAL_ANSWER log
+                logger.info(f"📤 FINAL_ANSWER received (type={type(answer)})")
+                logger.info(f"   Content: {answer}")
                 if answer_metadata:
-                    logger.info(f"FINAL ANSWER metadata: {answer_metadata}")
+                    logger.info(f"   Metadata: {answer_metadata}")
                 
                 if trace:
                     trace.add({
@@ -1589,6 +1604,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # Log expected vs submitted for debugging (with question numbers)
         logger.info(f"\n   📋 ANSWER COMPARISON:")
         expected_keys = list(gt_result[0].keys()) if gt_result else []
+        submitted_keys = set(reported_result.keys()) if reported_result else set()
+        # Debug: show key mismatch if any
+        missing_keys = set(expected_keys) - submitted_keys
+        extra_keys = submitted_keys - set(expected_keys)
+        if missing_keys:
+            logger.debug(f"   ⚠️ Missing keys in submission: {list(missing_keys)[:3]}")
+        if extra_keys:
+            logger.debug(f"   ⚠️ Extra keys in submission: {list(extra_keys)[:3]}")
         for i, key in enumerate(expected_keys, 1):
             expected_val = gt_result[0].get(key, "<missing>")
             # Retrieve submitted question string
@@ -1601,15 +1624,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.info(f"   {match} {key_display}")
             logger.info(f"      Expected:  {exp_str}")
             logger.info(f"      Submitted: {sub_str}")
-
-        
-        #  REPRODUCIBILITY
-        reproducibility_metrics: Optional[ReproducibilityMetrics] = None
-        if check_reproducibility:
-            reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
-            status = "✅" if reproducibility_metrics.success else "❌"
-            logger.info(f"   Reproducibility: {status} {reproducibility_metrics.reason}")
-            
+           
         # Count command timeouts for task adherence context
         command_timeouts = sum(
             1 for r in tool_result_events
@@ -1617,28 +1632,185 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             or "timed out" in str(r.get("summary", "")).lower()
             or "timeout" in str(r.get("summary", "")).lower()
         )
-        
+
+        # METHODOLOGY METRICS
+        logger.info(f"2️⃣  Extracting methodology metrics...")
+        methodology_metrics = extract_methodology_metrics(
+            tool_calls=tool_call_events,
+            tool_results=tool_result_events,
+            domain=domain,
+            task_prompt=task_prompt,
+            deleted_files=deleted_files,
+        )
+        # Show script execution info
+        executed_list = methodology_metrics.executed_scripts or []
+        failed_list = methodology_metrics.attempted_failed_scripts or []
+        executed_basenames = {os.path.basename(s) for s in executed_list}
+        failed_basenames = {os.path.basename(s) for s in failed_list}
+
+        if methodology_metrics.expected_scripts:
+            expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts}
+            logger.info(f"   Expected: {list(expected_basenames)}")
+
+            # What matched vs what didn't
+            matched_success = expected_basenames & executed_basenames
+            matched_failed = expected_basenames & failed_basenames
+            other_success = executed_basenames - expected_basenames
+            other_failed = failed_basenames - expected_basenames
+
+            if matched_success:
+                logger.info(f"   Executed: {list(matched_success)}")
+            elif matched_failed:
+                logger.info(f"   Executed: (none - expected script failed)")
+            else:
+                logger.info(f"   Executed: (none of expected)")
+
+            # Show what else ran
+            if other_success:
+                logger.info(f"   Also ran: {list(other_success)} (succeeded, not expected)")
+            if matched_failed:
+                logger.info(f"   Failed: {list(matched_failed)} (expected script)")
+            if other_failed:
+                logger.info(f"   Failed: {list(other_failed)} (not expected)")
+        else:
+            # Generic task - no specific scripts in prompt
+            if executed_list:
+                logger.info(f"   Executed: {list(executed_basenames)} (generic task)")
+            elif failed_list:
+                logger.info(f"   Attempted: {list(failed_basenames)} (failed - generic task)")
+            elif methodology_metrics.attempted_execution:
+                logger.info(f"   Executed: (attempted but failed - generic task)")
+        logger.info(f"   ✓ Methodology Score: {methodology_metrics.methodology_score:.2f}/1.0")
+        # Show score breakdown with max possible for each component
+        breakdown = methodology_metrics.score_breakdown
+        if breakdown:
+            # Define max weights per domain for display
+            if breakdown.domain == "corebench_hard":
+                max_doc, max_script, max_exec, max_success, max_recovery = 0.15, 0.15, 0.30, 0.30, 0.10
+            elif breakdown.domain == "corebench_medium":
+                max_doc, max_script, max_exec, max_success, max_recovery = 0.25, 0.0, 0.35, 0.25, 0.15
+            else:  # easy
+                max_doc, max_script, max_exec, max_success, max_recovery = 1.0, 0.0, 0.0, 0.0, 0.0
+
+            logger.info(f"   Score Breakdown:")
+            # Doc read
+            docs_list = ', '.join(methodology_metrics.docs_read) if methodology_metrics.docs_read else 'none read'
+            logger.info(f"     Doc Read:        {breakdown.doc_read_score:.2f}/{max_doc:.2f}  ({docs_list})")
+            # Script read (only for hard mode)
+            if breakdown.domain == "corebench_hard":
+                scripts_list = ', '.join(methodology_metrics.scripts_read) if methodology_metrics.scripts_read else 'none read'
+                logger.info(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
+            # Exec coverage - show which expected scripts were actually run
+            expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts} if methodology_metrics.expected_scripts else set()
+            executed_basenames = {os.path.basename(s) for s in (methodology_metrics.executed_scripts or [])}
+            failed_basenames = {os.path.basename(s) for s in (methodology_metrics.attempted_failed_scripts or [])}
+
+            if methodology_metrics.execution_coverage > 0:
+                if not expected_basenames:
+                    exec_cov_detail = "successful exec (generic task)"
+                else:
+                    matched = expected_basenames & executed_basenames
+                    if matched:
+                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} - matched: {', '.join(sorted(matched))}"
+                    else:
+                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} coverage"
+            elif methodology_metrics.attempted_execution:
+                if not expected_basenames:
+                    exec_cov_detail = "attempted but failed (generic task)"
+                else:
+                    matched_failed = expected_basenames & failed_basenames
+                    if matched_failed:
+                        exec_cov_detail = f"expected script failed ({', '.join(sorted(matched_failed))})"
+                    else:
+                        exec_cov_detail = "ran different script (not expected)"
+            else:
+                exec_cov_detail = "not attempted"
+            logger.info(f"     Exec Coverage:   {breakdown.execution_coverage_score:.2f}/{max_exec:.2f}  ({exec_cov_detail})")
+            # Successful exec - show what actually succeeded
+            if methodology_metrics.successful_execution:
+                executed_list = methodology_metrics.executed_scripts or []
+                if executed_list:
+                    # Show the script(s) that succeeded
+                    success_scripts = ', '.join(os.path.basename(s) for s in executed_list)
+                    success_detail = f"exit_code=0 ({success_scripts})"
+                else:
+                    success_detail = "exit_code=0"
+            else:
+                success_detail = "no successful run"
+            logger.info(f"     Successful Exec: {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
+            # Error recovery
+            err = methodology_metrics.error_recovery
+            if err.total_errors > 0:
+                error_types_str = ', '.join(f"{k}:{v}" for k, v in err.error_types.items()) if err.error_types else 'unclassified'
+                recovery_pct = (err.errors_recovered / err.total_errors) * 100
+                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  ({err.errors_recovered}/{err.total_errors} = {recovery_pct:.0f}% - {error_types_str})")
+            else:
+                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  (no errors)")
+            # Penalties
+            if breakdown.penalty != 0:
+                logger.info(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")
+            logger.info(f"     ─────────────────────")
+        # Show additional details
+        if methodology_metrics.stdout_captured:
+            logger.info(f"   - Stdout Captured: {methodology_metrics.stdout_total_bytes:,} bytes")
+        if methodology_metrics.violations:
+            logger.info(f"   ⚠️ Violations: {', '.join(methodology_metrics.violations)}")
+
+        # Add methodology metrics to trace
+        if trace:
+            trace.add({
+                "type": "methodology_metrics",
+                "flow": "green -> trace",
+                "methodology_score": round(methodology_metrics.methodology_score, 4),
+                "read_documentation": methodology_metrics.read_documentation,
+                "docs_read": methodology_metrics.docs_read,
+                "read_target_script": methodology_metrics.read_target_script,
+                "scripts_read": methodology_metrics.scripts_read,
+                "attempted_execution": methodology_metrics.attempted_execution,
+                "execution_attempts": methodology_metrics.execution_attempts,
+                "successful_execution": methodology_metrics.successful_execution,
+                "installed_dependencies": methodology_metrics.installed_dependencies,
+                "expected_scripts": methodology_metrics.expected_scripts,
+                "executed_scripts": methodology_metrics.executed_scripts,
+                "execution_coverage": round(methodology_metrics.execution_coverage, 4),
+                "stdout_captured": methodology_metrics.stdout_captured,
+                "stdout_total_bytes": methodology_metrics.stdout_total_bytes,
+                "error_recovery": {
+                    "total_errors": methodology_metrics.error_recovery.total_errors,
+                    "errors_recovered": methodology_metrics.error_recovery.errors_recovered,
+                    "recovery_rate": round(methodology_metrics.error_recovery.recovery_rate, 4),
+                    "consecutive_failures": methodology_metrics.error_recovery.consecutive_failures,
+                    "persistence_score": round(methodology_metrics.error_recovery.persistence_score, 4),
+                },
+                "violations": methodology_metrics.violations,
+                "score_breakdown": {
+                    "domain": methodology_metrics.score_breakdown.domain,
+                    "doc_read_score": round(methodology_metrics.score_breakdown.doc_read_score, 4),
+                    "script_read_score": round(methodology_metrics.score_breakdown.script_read_score, 4),
+                    "execution_coverage_score": round(methodology_metrics.score_breakdown.execution_coverage_score, 4),
+                    "successful_execution_score": round(methodology_metrics.score_breakdown.successful_execution_score, 4),
+                    "error_recovery_score": round(methodology_metrics.score_breakdown.error_recovery_score, 4),
+                    "penalty": round(methodology_metrics.score_breakdown.penalty, 4),
+                    "total": round(methodology_metrics.score_breakdown.total, 4),
+                } if methodology_metrics.score_breakdown else None,
+            })
+
         # TASK ADHERENCE
-        # logger.info(f"4️⃣  Computing task adherence (LLM judge: {judge_llm})...")
+        logger.info(f"3️⃣  Computing task adherence (LLM judge: {judge_llm})...")
         trace_event_callback = trace.add if trace else None
         adherence_metrics = await evaluate_task_adherence(
             domain=domain,
             task_prompt=task_prompt,
-            steps_used=steps_used,
+            questions=expected_keys,  # The actual questions the agent needs to answer
             tool_calls_count=tool_calls_count,
-            protocol_errors=protocol_errors,
             submitted=reported_result,
-            accuracy_result=accuracy_metrics,
-            action_trace=tool_call_events,
             tool_calls=tool_call_events,
             tool_results=tool_result_events,
             workspace_dir=self._workspace_dir,
             trace_event_callback=trace_event_callback,
             judge_model=judge_llm,
-            command_timeouts=command_timeouts,
         )
         logger.info(f"   ✓ Adherence Score: {adherence_metrics.score:.2f}/1.0")
-        logger.info(f"   ✓ Navigation Quality: {adherence_metrics.navigation_quality}")
         if adherence_metrics.reasoning:
             logger.info(f"\n   💭 Judge Reasoning (Task Adherence):")
             for line in adherence_metrics.reasoning.split('\n'):
@@ -1666,12 +1838,12 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             domain=domain,
             success=task_success,
             accuracy=accuracy_metrics,
-            reproducibility=reproducibility_metrics,
             task_adherence=adherence_metrics,
             efficiency=efficiency_metrics,
             submitted_answer=reported_result,
             ground_truth=gt_result,
             task_cost=cost_metadata.get("cost") if cost_metadata else None,
+            methodology_metrics=methodology_metrics,
         )
         
         # Add evaluation to trace as dict

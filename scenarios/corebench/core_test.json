@@ -995,7 +995,6 @@
                 "What is the median net savings in billions (B)?": 11.26,
                 "what is the mean net savings in billions (B)?": 24.87
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.9425963.v1"
     },
@@ -1021,7 +1020,6 @@
                 "What is the median social NPV (Trillion USD)?": 1.8,
                 "How many approximate lives saved?": 1200000
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.4544914.v1"
     },
@@ -1044,7 +1042,6 @@
                 "Which model has the highest Macro F1?": "CatBoost",
                 "What is the ROC AUC (macro OvR) of the best performing model?": 0.957
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.2418823.v1"
     },
@@ -1057,20 +1054,19 @@
         "results": [
             {
                 "fig which method has the lowest AUC?": "CATphising",
-                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
-                "What is the highest AUC based on the output xlsx?": 0.978	
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning",
+                "What is the highest AUC based on the output xlsx?": 0.978
             },
             {
                 "fig which method has the lowest AUC?": "CATphising",
-                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
-                "What is the highest AUC based on the output xlsx?": 0.978	
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning",
+                "What is the highest AUC based on the output xlsx?": 0.978
             },
             {
                 "fig which method has the lowest AUC?": "CATphising",
-                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning", 
-                "What is the highest AUC based on the output xlsx?": 0.978	
+                "Based on the output xlsx, what method has the overall highest AUC?": "Federated Learning",
+                "What is the highest AUC based on the output xlsx?": 0.978
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.4976589.v1"
     },
@@ -1093,7 +1089,6 @@
                 "What is the mean of the snf_effectiveness_index?": 0.5791337825021187,
                 "What is the median of the dignity_score?": 0.5888590852515395
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.9005626.v1"
     },
@@ -1116,13 +1111,12 @@
                 "Fig is the racial prototypical higher amongst the black or the white in the very liberal category?": "Black",
                 "Fig among the very liberal category, which proportion is higher between persona vs. not persona?": "Persona"
             }
-
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.3160992.v1"
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Human Dignity Firewall v1.3 — Zero-Leakage Autonomy Engine for Manipulation Detection & Behavioral Integrity",
         "capsule_id": "capsule-2538444",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1130,24 +1124,24 @@
             {
                 "How many Draconian human-dignity laws are there? Respond in integer": 4,
                 "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
-        "What is the exit status?": "SUCCESS"
+                "What is the exit status?": "SUCCESS"
             },
             {
                 "How many Draconian human-dignity laws are there? Respond in integer": 4,
                 "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
-        "What is the exit status?": "SUCCESS"
+                "What is the exit status?": "SUCCESS"
             },
             {
                 "How many Draconian human-dignity laws are there? Respond in integer": 4,
                 "What is the first law of Draconian human-dignity?": "Manipulation Detection Test",
-        "What is the exit status?": "SUCCESS"
+                "What is the exit status?": "SUCCESS"
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.3008145.v1"
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "ZVIS v1.6 — Ultra-Audit & Verification Capsule",
         "capsule_id": "capsule-4020210",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1172,7 +1166,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "VERA-DNA v2.1 — Ultra-Golden Capsule",
         "capsule_id": "capsule-8514506",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1197,7 +1191,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "SIF — Golden Proof-Bundle Execution Capsule (v1.0)",
         "capsule_id": "capsule-5944340",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1219,7 +1213,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "SPORTS.DNA — Golden SDK Execution Capsule (v1.1)",
         "capsule_id": "capsule-9398054",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1241,29 +1235,38 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "DignityProof — Global Verifiability Capsule (v1.0)",
         "capsule_id": "capsule-7655932",
         "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
                 "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
-                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [
+                    196000,
+                    364000
+                ]
             },
             {
                 "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
-                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [
+                    196000,
+                    364000
+                ]
             },
             {
                 "What is the point estimate (deaths averted synthetic) from the child wasting impact model? Give results as integer.": 280000,
-                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [196000, 364000]
+                "What is the child wasting impact model reported 95% interval (synthetic)? Give a list of 2 integer value for the confidence interval.": [
+                    196000,
+                    364000
+                ]
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.0436753.v1"
     },
     {
         "field": "Social Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Proactive and reactive construction of memory-based preferences",
         "capsule_id": "capsule-0625246",
         "task_prompt": "Run the run file and report on the results.",
@@ -1282,7 +1285,7 @@
     },
     {
         "field": "Social Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Bayesian Social Science Statistics: from the Very Beginning",
         "capsule_id": "capsule-8772484",
         "task_prompt": "Run the run file and report on the generated output.",
@@ -1301,7 +1304,7 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Measured intrapatient radiomic variability as a predictor of treatment response in multi-metastatic soft tissue sarcoma patients (revised)",
         "capsule_id": "capsule-3030670",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1320,7 +1323,7 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Boundary Complexity of (Sub-) Cortical Areas Predict Deep Brain Stimulation Outcomes in Parkinson's Disease",
         "capsule_id": "capsule-0732329",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1342,7 +1345,7 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Unravelling the transcriptome of the human tuberculosis lesion and its clinical implications",
         "capsule_id": "capsule-9294029",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1361,7 +1364,7 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "custom code for: Predicting IVF live birth probabilities using live machine learning, center-specific models",
         "capsule_id": "capsule-6295990",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1383,26 +1386,35 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "VascularBC-ST: the code to analyze the Vascular microenvironment of Breast Cancer using Spatial Transcriptome",
         "capsule_id": "capsule-9477017",
         "task_prompt": "Run the run file and report on the final outputs.",
         "results": [
             {
-                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": [
+                    "Smooth.1",
+                    "Endo.1"
+                ]
             },
             {
-                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": [
+                    "Smooth.1",
+                    "Endo.1"
+                ]
             },
             {
-                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": ["Smooth.1", "Endo.1"]
+                "fig Pearson correlation coefficients between the estimated proportions of different cell types were calculated, what is the highest pearson correlation related to? Give response in a list of strings": [
+                    "Smooth.1",
+                    "Endo.1"
+                ]
             }
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.9243235.v1"
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Codex Wall v4.0 — Encrypted Holo-Causality & Predictive Governance (Reproducible Capsule)",
         "capsule_id": "capsule-0201673",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1427,7 +1439,7 @@
     },
     {
         "field": "Social Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Preventing Sexual Violence -- A Behavioral Problem Without a Behaviorally-Informed Solution",
         "capsule_id": "capsule-3088870",
         "task_prompt": "Run the run file and report on the final outputs.",
@@ -1446,33 +1458,32 @@
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Deep learning-enabled accurate assessment of gait impairments in Parkinson's disease using smartphone videos",
         "capsule_id": "capsule-0152700",
         "task_prompt": "Run the corresponding models and report on the generated output.",
         "results": [
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
             },
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
-            }, 
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+            },
             {
-                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes", 
-            "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
-            "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
+                "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
+                "fig which joint has the lowest absolute spearman correlation for acceleration?": "ankle",
+                "Given the Kruskal-Wallis for Group 0-2 (Group 1 vs. Group 3), what is the p-value?": "2.341092434893948e-10"
             }
-            
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.7700825.v1"
     },
     {
         "field": "Medical Sciences",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "A motif preferred adenine base editor with minimal bystander and off-targets editing",
         "capsule_id": "capsule-2242462",
         "task_prompt": "Run the main.py file and report on the final outputs.",
@@ -1494,7 +1505,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "PM-Score-Net: A Disjoint-Label Multi-Task Learning Framework for Automated Continuous Severity Assessment of Myopic Maculopathy",
         "capsule_id": "capsule-3762736",
         "task_prompt": "Run all the eval scripts and report on the final outputs.",
@@ -1516,7 +1527,7 @@
     },
     {
         "field": "Computer Science",
-        "language": "Python", 
+        "language": "Python",
         "capsule_title": "Reshaping Reservoirs with Hebbian Plasticity:Unsupervised Adaptation that Works",
         "capsule_id": "capsule-2545370",
         "task_prompt": "Run all the 2.hag_explorator.ipynb and report on the generated html results.",
@@ -1538,7 +1549,7 @@
     },
     {
         "field": "Social Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Mortality impacts of rainfall and sea level rise in a developing megacity",
         "capsule_id": "capsule-5558058",
         "task_prompt": "Run the 1_run.R and report on the results.",
@@ -1560,27 +1571,24 @@
     },
     {
         "field": "Social Sciences",
-        "language": "R", 
+        "language": "R",
         "capsule_title": "Replication materials for: Measuring Distances in High Dimensional Spaces Why Average Group Vector Comparisons Exhibit Bias, And What to Do About it",
         "capsule_id": "capsule-0912480",
         "task_prompt": "Run the main_run_scripts.R file and report on the generated output.",
         "results": [
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             },
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             },
             {
-                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400, 
+                "fig between 400 users and 2000 users, which user number has a bigger correction difference in squared Euclidean norm of differences in mean?": 400,
                 "fig does Random group: 50%−50% or Random group: 10%−90% have a higher Squared Euclidean norm of differences in means? Respond in 50-50 or 10-90.": "10-90"
             }
-            
         ],
         "capsule_doi": "https://doi.org/10.24433/CO.1397436.v1"
     }
-
-
 ]

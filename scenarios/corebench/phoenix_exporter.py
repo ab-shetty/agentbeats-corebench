@@ -62,10 +62,12 @@ def _initialize():
         from arize.otel import register
 
         # Use Arize's official registration helper
+        # set_global_tracer_provider=False prevents a2a-sdk's internal traces
         _tracer_provider = register(
             space_id=ARIZE_SPACE_ID,
             api_key=ARIZE_API_KEY,
             project_name=ARIZE_PROJECT,
+            set_global_tracer_provider=False,
         )
 
         _tracer = _tracer_provider.get_tracer("corebench.evaluator", "1.0.0")
@@ -190,6 +192,15 @@ def export_trace(
                 # Explicitly set session_id on span
                 summary_span.set_attribute(SpanAttributes.SESSION_ID, session_id)
 
+                # Add plan events (agent reasoning steps)
+                for event in events:
+                    if event.get("type") == "plan":
+                        summary_span.add_event("plan", attributes={
+                            "turn": event.get("turn", 0),
+                            "flow": event.get("flow", ""),
+                            "content": _truncate(event.get("content", "")),
+                        })
+
                 # Final answer
                 if final_answer:
                     content = final_answer.get("content", {})
@@ -208,35 +219,22 @@ def export_trace(
                 if llm_judge_output:
                     parsed = llm_judge_output.get("parsed", {})
 
-                    summary_span.set_attribute("judge.name", llm_judge_output.get("judge", ""))
                     summary_span.set_attribute("judge.model", llm_judge_output.get("model", ""))
                     summary_span.set_attribute("judge.domain", llm_judge_output.get("domain", ""))
                     summary_span.set_attribute("judge.score", parsed.get("score", 0))
-                    summary_span.set_attribute("judge.followed_instructions", parsed.get("followed_instructions", False))
-                    summary_span.set_attribute("judge.navigation_quality", parsed.get("navigation_quality", ""))
                     summary_span.set_attribute("judge.reasoning", _truncate(parsed.get("reasoning", "")))
-
-                    if parsed.get("component_scores"):
-                        summary_span.set_attribute("judge.component_scores", json.dumps(parsed["component_scores"]))
                     if parsed.get("strengths"):
                         summary_span.set_attribute("judge.strengths", json.dumps(parsed["strengths"]))
                     if parsed.get("weaknesses"):
                         summary_span.set_attribute("judge.weaknesses", json.dumps(parsed["weaknesses"]))
-                    if parsed.get("penalties_applied"):
-                        summary_span.set_attribute("judge.penalties_applied", json.dumps(parsed["penalties_applied"]))
-
-                    summary_span.set_attribute("judge.raw_output", _truncate(llm_judge_output.get("raw", "")))
 
                 # LLM Judge Input
                 if llm_judge_input:
                     summary_span.set_attribute("judge_input.task_prompt", _truncate(llm_judge_input.get("task_prompt", "")))
-                    summary_span.set_attribute("judge_input.steps_used", llm_judge_input.get("steps_used", 0))
                     summary_span.set_attribute("judge_input.tool_calls_count", llm_judge_input.get("tool_calls_count", 0))
-                    summary_span.set_attribute("judge_input.protocol_errors", llm_judge_input.get("protocol_errors", 0))
                     summary_span.set_attribute("judge_input.command_timeouts", llm_judge_input.get("command_timeouts", 0))
                     summary_span.set_attribute("judge_input.has_answer", llm_judge_input.get("has_answer", False))
-                    summary_span.set_attribute("judge_input.answer_summary", llm_judge_input.get("answer_summary", ""))
-                    summary_span.set_attribute("judge_input.action_summary", _truncate(llm_judge_input.get("action_summary", "")))
+                    summary_span.set_attribute("judge_input.tool_interactions", _truncate(llm_judge_input.get("tool_interactions", "")))
 
                 # Full Evaluation Metrics
                 if eval_data:
@@ -258,25 +256,12 @@ def export_trace(
 
                     if accuracy.get("question_results"):
                         summary_span.set_attribute("eval.accuracy.question_results", _truncate(json.dumps(accuracy["question_results"], indent=2)))
-                    if accuracy.get("missing_questions"):
-                        summary_span.set_attribute("eval.accuracy.missing_questions", json.dumps(accuracy["missing_questions"]))
-
-                    # Reproducibility
-                    repro = eval_data.get("reproducibility", {})
-                    summary_span.set_attribute("eval.reproducibility.success", repro.get("success", False))
-                    summary_span.set_attribute("eval.reproducibility.results_dir_exists", repro.get("results_dir_exists", False))
-                    summary_span.set_attribute("eval.reproducibility.num_output_files", repro.get("num_output_files", 0))
-                    summary_span.set_attribute("eval.reproducibility.total_output_bytes", repro.get("total_output_bytes", 0))
-                    summary_span.set_attribute("eval.reproducibility.reason", repro.get("reason", ""))
-
-                    if repro.get("output_files"):
-                        summary_span.set_attribute("eval.reproducibility.output_files", json.dumps(repro["output_files"]))
+                    if accuracy.get("extra_questions"):
+                        summary_span.set_attribute("eval.accuracy.extra_questions", json.dumps(accuracy["extra_questions"]))
 
                     # Adherence
                     adherence = eval_data.get("task_adherence", {})
                     summary_span.set_attribute("eval.adherence.score", adherence.get("score", 0))
-                    summary_span.set_attribute("eval.adherence.followed_instructions", adherence.get("followed_instructions", False))
-                    summary_span.set_attribute("eval.adherence.navigation_quality", adherence.get("navigation_quality", ""))
                     summary_span.set_attribute("eval.adherence.reasoning", _truncate(adherence.get("reasoning", "")))
                     summary_span.set_attribute("eval.adherence.status", adherence.get("status", ""))
 
@@ -295,6 +280,34 @@ def export_trace(
                     summary_span.set_attribute("eval.efficiency.time_seconds", efficiency.get("time_seconds", 0))
                     summary_span.set_attribute("eval.efficiency.protocol_errors", efficiency.get("protocol_errors", 0))
                     summary_span.set_attribute("eval.efficiency.command_timeouts", efficiency.get("command_timeouts", 0))
+
+                    # Methodology
+                    methodology = eval_data.get("methodology_metrics", {})
+                    if methodology:
+                        summary_span.set_attribute("eval.methodology.score", methodology.get("methodology_score", 0))
+                        summary_span.set_attribute("eval.methodology.read_documentation", methodology.get("read_documentation", False))
+                        summary_span.set_attribute("eval.methodology.read_target_script", methodology.get("read_target_script", False))
+                        summary_span.set_attribute("eval.methodology.attempted_execution", methodology.get("attempted_execution", False))
+                        summary_span.set_attribute("eval.methodology.successful_execution", methodology.get("successful_execution", False))
+                        summary_span.set_attribute("eval.methodology.execution_coverage", methodology.get("execution_coverage", 0))
+                        summary_span.set_attribute("eval.methodology.installed_dependencies", methodology.get("installed_dependencies", False))
+                        summary_span.set_attribute("eval.methodology.read_preexisting_results", methodology.get("read_preexisting_results", False))
+
+                        if methodology.get("docs_read"):
+                            summary_span.set_attribute("eval.methodology.docs_read", json.dumps(methodology["docs_read"]))
+                        if methodology.get("scripts_read"):
+                            summary_span.set_attribute("eval.methodology.scripts_read", json.dumps(methodology["scripts_read"]))
+                        if methodology.get("executed_scripts"):
+                            summary_span.set_attribute("eval.methodology.executed_scripts", json.dumps(methodology["executed_scripts"]))
+                        if methodology.get("violations"):
+                            summary_span.set_attribute("eval.methodology.violations", json.dumps(methodology["violations"]))
+
+                        # Error recovery
+                        error_recovery = methodology.get("error_recovery", {})
+                        if error_recovery:
+                            summary_span.set_attribute("eval.methodology.error_recovery.total_errors", error_recovery.get("total_errors", 0))
+                            summary_span.set_attribute("eval.methodology.error_recovery.recovery_rate", error_recovery.get("recovery_rate", 0))
+                            summary_span.set_attribute("eval.methodology.error_recovery.persistence_score", error_recovery.get("persistence_score", 0))
 
                     if eval_data.get("task_cost") is not None:
                         summary_span.set_attribute("eval.task_cost", eval_data["task_cost"])
@@ -317,18 +330,42 @@ def export_trace(
 
                 adherence = eval_data.get("task_adherence", {})
                 accuracy = eval_data.get("accuracy", {})
+                methodology = eval_data.get("methodology_metrics", {})
+
+                # Build methodology explanation from key behaviors
+                methodology_parts = []
+                if methodology.get("read_documentation"):
+                    methodology_parts.append("read docs")
+                if methodology.get("read_target_script"):
+                    methodology_parts.append("read script")
+                if methodology.get("attempted_execution"):
+                    methodology_parts.append("attempted exec")
+                if methodology.get("successful_execution"):
+                    methodology_parts.append("exec succeeded")
+                if methodology.get("read_preexisting_results"):
+                    methodology_parts.append("READ RESULTS (anti-pattern)")
+                coverage = methodology.get("execution_coverage", 0)
+                methodology_explanation = f"{', '.join(methodology_parts) or 'no actions'}; coverage={coverage:.0%}"
+
+                methodology_pass = (
+                    methodology.get("attempted_execution", False) and
+                    not methodology.get("read_preexisting_results", False)
+                )
 
                 # Create evaluation DataFrame
                 eval_df = pd.DataFrame([{
                     "context.span_id": first_span_id,
                     # Adherence score
                     "eval.adherence.score": adherence.get("score", 0),
-                    "eval.adherence.label": "pass" if adherence.get("followed_instructions", False) else "fail",
+                    "eval.adherence.label": "pass" if adherence.get("score", 0) >= 0.5 else "fail",
                     "eval.adherence.explanation": adherence.get("reasoning", "")[:500],
                     # Accuracy score
                     "eval.accuracy.score": accuracy.get("accuracy", 0),
                     "eval.accuracy.label": "pass" if eval_data.get("success", False) else "fail",
                     "eval.accuracy.explanation": f"{accuracy.get('correct_answers', 0)}/{accuracy.get('total_questions', 0)} correct",
+                    "eval.methodology.score": methodology.get("methodology_score", 0),
+                    "eval.methodology.label": "pass" if methodology_pass else "fail",
+                    "eval.methodology.explanation": methodology_explanation,
                 }])
 
                 # Log evaluations to Arize

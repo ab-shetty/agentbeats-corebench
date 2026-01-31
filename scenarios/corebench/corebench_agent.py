@@ -67,6 +67,8 @@ TEXT_MODEL: str = DEFAULT_MODEL
 # Number of action is counted in agentbeats, therefore planning interval is 4 
 PLANNING_INTERVAL = int((os.getenv("COREBENCH_PLANNING_INTERVAL") or "4").strip() or "4")
 MAX_STEPS = int((os.getenv("COREBENCH_MAX_STEPS") or "40").strip() or "40")
+# Max lines to show in plan logging summary
+PLAN_LOG_MAX_LINES = int((os.getenv("COREBENCH_PLAN_LOG_MAX_LINES") or "12").strip() or "12")
 
 # =========================
 # SYSTEM PROMPT
@@ -346,7 +348,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         """Generate a plan using initial or update planning prompts."""
         # Decide which planning template to use - initial or update(pre+post)
         if state["step_number"] == 1:
-            logger.info("Planning template: initial_plan")
+            #logger.info("Planning template: initial_plan")
             plan_prompt = self._planning_initial_template or ""
             if not plan_prompt:
                 return "Plan unavailable."
@@ -376,6 +378,27 @@ class CoreBenchPurpleAgent(AgentExecutor):
             return "Plan unavailable."
         return response.choices[0].message.content or "Plan unavailable."
 
+    # Function to log a concise summary of the generated plan
+    def _log_plan_summary(self, plan_text: str) -> None:
+        """Log a concise summary of the plan showing headers and key items."""
+        lines = [l for l in plan_text.splitlines() if l.strip()]
+
+        # Extract section headers and first few bullet points
+        summary_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Keep markdown headers
+            if stripped.startswith('#') or stripped.startswith('**'):
+                summary_lines.append(stripped)
+            # Keep numbered items and bullets (truncate long ones)
+            elif stripped.startswith('-') or re.match(r'^\d+\.', stripped):
+                truncated = stripped[:120] + ('...' if len(stripped) > 120 else '')
+                summary_lines.append(truncated)
+
+        logger.info(f"🤔 [PLAN] Generated ({len(lines)} lines):")
+        for line in summary_lines[:PLAN_LOG_MAX_LINES]:
+            logger.info(f"  {line}")
+
     # -------------------------
     # Main execution loop
     # -------------------------
@@ -399,7 +422,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
         state = self._ensure_state(context.context_id)
         logger.info(f"Number of steps: {state}")
         # Decide whether to insert a plan
-        logger.info(f"Insert plan decision: {self._insert_plan(state)}")
+        #logger.info(f"Insert plan decision: {self._insert_plan(state)}")
 
         # Enforce max steps across the conversation
         if state["step_number"] > MAX_STEPS:
@@ -430,16 +453,17 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
         did_plan = False
         for turn in range(max_turns):
-            logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
+            #logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
                 # Insert plan if it is the right step
                 if not did_plan and self._insert_plan(state):
                     # Generate and insert plan
                     plan_text = self._generate_plan(context.context_id, user_input, state, messages)
                     messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
-                    logger.debug(f"Plan: {plan_text}")
+                    self._log_plan_summary(plan_text)
                     logger.debug(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     state["last_planned_step"] = state["step_number"]
+                    state["pending_plan"] = plan_text # Store plan to attach to next tool response
                     did_plan = True
 
                 logger.debug(f"Sending {len(messages)} messages to LLM")
@@ -617,8 +641,11 @@ Example:
                     }
                     logger.info(f"Adding token metadata to FINAL_ANSWER: {tool_call['arguments']['_metadata']}")
 
+                # Attach plan to response so it can be added to traces
+                pending_plan = state.pop("pending_plan", None)
+                plan_block = f"<plan>\n{pending_plan}\n</plan>\n" if pending_plan else ""
                 # Always forward tool intent verbatim
-                formatted = "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
+                formatted = plan_block + "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
                 logger.info(f"Sending tool call: {tool_call.get('name', 'unknown')}")
 
                 await event_queue.enqueue_event(
