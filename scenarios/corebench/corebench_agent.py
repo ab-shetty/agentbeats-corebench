@@ -12,6 +12,7 @@ This agent:
 
 import argparse
 import json
+import ast
 import re
 import sys
 import os
@@ -50,12 +51,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("openai").setLevel(logging.WARNING)
 logging.getLogger("a2a").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
-
-# Configuration:
-# - Model specified via COREBENCH_TEXT_MODEL env var (uses litellm format: "provider/model")
-# - Examples: "openai/gpt-4", "anthropic/claude-3-opus", "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
-# - If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM (prepends "openai/" if needed)
+# Configuration in .env:
+# Only API_KEYS set -> DEFAULT_MODEL
+# Also COREBENCH_** set → self-hosted, prepends "openai/"
 DEFAULT_MODEL = "nebius/Qwen/Qwen3-Coder-30B-A3B-Instruct"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
@@ -66,6 +66,9 @@ TEXT_MODEL: str = DEFAULT_MODEL
 # Smolagents sets as 4(1.plan->act->observe 2.act->observe 3.act->observe 4.act->observe)
 # Number of action is counted in agentbeats, therefore planning interval is 4 
 PLANNING_INTERVAL = int((os.getenv("COREBENCH_PLANNING_INTERVAL") or "4").strip() or "4")
+MAX_STEPS = int((os.getenv("COREBENCH_MAX_STEPS") or "40").strip() or "40")
+# Max lines to show in plan logging summary
+PLAN_LOG_MAX_LINES = int((os.getenv("COREBENCH_PLAN_LOG_MAX_LINES") or "12").strip() or "12")
 
 # =========================
 # SYSTEM PROMPT
@@ -116,14 +119,25 @@ To provide the final answer, respond with:
 
 class CoreBenchPurpleAgent(AgentExecutor):
     """
-    Purple agent that emits tool intent only.
-    Tool execution is handled entirely by the green evaluator.
+    CoreBench Purple Agent. Purple agent that emits tool intent only.
+
+    This agent is responsible for:
+    - Maintaining conversation state per context_id
+    - Emitting *tool intent only* (no tool execution)
+    - Generating and updating ReAct-style plans
+    - Tracking token usage for analysis and benchmarking
+
+    Design notes:
+    - Tool execution is explicitly delegated to a downstream "green" evaluator.
+    - This agent only reasons, plans, and outputs structured tool calls.
+    - Supports both hosted APIs and self-hosted OpenAI-compatible vLLM endpoints.
     """
 
     def __init__(self):
         self.ctx_id_to_messages: dict[str, list[dict]] = {} # Conversation history
         self.ctx_id_to_state: dict[str, dict[str, int]] = {} # Step tracker
         self.ctx_id_to_tokens: dict[str, dict[str, int]] = {} # Token usage tracker
+        self.ctx_id_to_task_prompt: dict[str, str] = {} # Original task prompt
         self._planning_initial_template = ""
         self._planning_update_pre_template = ""
         self._planning_update_post_template = ""
@@ -148,13 +162,74 @@ class CoreBenchPurpleAgent(AgentExecutor):
         except Exception as e:
             logger.warning(f"Failed to load planning prompts from {prompts_file}: {e}")
 
-    def _completion_kwargs(self, messages: list[dict]) -> dict:
-        """
-        Build litellm.completion kwargs.
+    def _check_if_giving_up(self, context_id: str, answer) -> tuple[bool, str]:
+        """Use the LLM to determine if the answer indicates giving up on the task."""
+        answer_str = str(answer)
+        check_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an evaluator determining if an agent's answer indicates giving up on a task.\n\n"
+                    "All tasks are possible to complete, and the agent should never give up by saying a task is "
+                    "impossible, unavailable, or not reproducible.\n\n"
+                    "Analyze the answer and determine if it indicates giving up (e.g., contains phrases like "
+                    "\"unobtainable\", \"unavailable\", \"NOT REPRODUCIBLE\", \"ERROR\", \"NOT FOUND\", "
+                    "\"unknown\", or null/empty values, or is an empty dict {}).\n\n"
+                    "Respond with ONLY \"GIVING_UP\" if the answer indicates giving up, "
+                    "or \"VALID_ATTEMPT\" if it appears to be a genuine attempt at solving the problem."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Analyze this answer to determine if the agent is giving up:\n\n{answer_str}",
+            },
+        ]
+        try:
+            response = completion(**self._completion_kwargs(check_messages))
+            self._track_tokens(context_id, response)
+            evaluation = (response.choices[0].message.content or "").strip()
+            logger.info(f"Giving-up check evaluation: {evaluation}")
+            is_giving_up = "GIVING_UP" in evaluation
+            if is_giving_up:
+                feedback = (
+                    "The answer indicates giving up on the task. "
+                    "All tasks are possible to complete. Please try a different approach."
+                )
+            else:
+                feedback = "The answer appears to be a genuine attempt."
+            return is_giving_up, feedback
+        except Exception as e:
+            logger.error(f"Error during giving-up check: {e}")
+            return False, f"Error during evaluation: {e}"
 
-        If COREBENCH_TEXT_API_BASE is set → self-hosted vLLM with api_base/api_key
-        Otherwise → pass model to litellm as-is (provider prefix already included)
-        """
+    def _extract_dict_keys(self, prompt: str) -> Optional[list]:
+        """Extract dictionary keys from a dict_keys([...]) pattern in the task prompt."""
+        pattern = r"dict_keys\((\[.*?\])\)"
+        match = re.search(pattern, prompt)
+        if match:
+            try:
+                keys = ast.literal_eval(match.group(1))
+                logger.debug(f"Extracted expected dict keys: {keys}")
+                return keys
+            except (ValueError, SyntaxError) as e:
+                logger.warning(f"Failed to parse dict_keys: {e}")
+                return None
+        return None
+
+    def _validate_answer_keys(self, answer, expected_keys: list) -> Optional[str]:
+        """Validate that answer is a dict with exactly the expected keys. Returns error msg or None."""
+        if not isinstance(answer, dict):
+            return f"The submitted answer must be a dictionary with the following keys: {expected_keys}"
+        missing_keys = [key for key in expected_keys if key not in answer]
+        if missing_keys:
+            return f"The submitted answer is missing the following keys: {missing_keys}"
+        extra_keys = [key for key in answer if key not in expected_keys]
+        if extra_keys:
+            return f"The submitted answer contains extra keys: {extra_keys}. Expected keys: {expected_keys}"
+        return None
+
+    def _completion_kwargs(self, messages: list[dict]) -> dict:
+        """Build litellm.completion kwargs."""
         if TEXT_API_BASE:
             # Self-hosted vLLM: OpenAI-compatible endpoint
             model = TEXT_MODEL
@@ -273,7 +348,6 @@ class CoreBenchPurpleAgent(AgentExecutor):
         """Generate a plan using initial or update planning prompts."""
         # Decide which planning template to use - initial or update(pre+post)
         if state["step_number"] == 1:
-            logger.info("Planning template: initial_plan")
             plan_prompt = self._planning_initial_template or ""
             if not plan_prompt:
                 return "Plan unavailable."
@@ -283,7 +357,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
             ]
         else:
             logger.info("Planning template: update_plan_pre_messages + update_plan_post_messages")
-            remaining_steps = max(0, 10 - state["step_number"])
+            remaining_steps = max(0, MAX_STEPS - state["step_number"])
             pre_template = self._planning_update_pre_template or ""
             post_template = self._planning_update_post_template or ""
             if not pre_template or not post_template:
@@ -296,12 +370,33 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 {"role": "user", "content": history_text},
                 {"role": "user", "content": post_text},
             ]
-            logger.info(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
+            logger.debug(f"Plan messages: {json.dumps(plan_messages, indent=2)}")
         response = completion(**self._completion_kwargs(plan_messages))
         self._track_tokens(context_id, response)
         if not response.choices or not response.choices[0].message:
             return "Plan unavailable."
         return response.choices[0].message.content or "Plan unavailable."
+
+    # Function to log a concise summary of the generated plan
+    def _log_plan_summary(self, plan_text: str) -> None:
+        """Log a concise summary of the plan showing headers and key items."""
+        lines = [l for l in plan_text.splitlines() if l.strip()]
+
+        # Extract section headers and first few bullet points
+        summary_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Keep markdown headers
+            if stripped.startswith('#') or stripped.startswith('**'):
+                summary_lines.append(stripped)
+            # Keep numbered items and bullets (truncate long ones)
+            elif stripped.startswith('-') or re.match(r'^\d+\.', stripped):
+                truncated = stripped[:120] + ('...' if len(stripped) > 120 else '')
+                summary_lines.append(truncated)
+
+        logger.info(f"[PLAN] Generated ({len(lines)} lines):")
+        for line in summary_lines[:PLAN_LOG_MAX_LINES]:
+            logger.debug(f"  {line}")
 
     # -------------------------
     # Main execution loop
@@ -321,11 +416,32 @@ class CoreBenchPurpleAgent(AgentExecutor):
             self.ctx_id_to_messages[context.context_id] = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
+            self.ctx_id_to_task_prompt[context.context_id] = user_input
         # Get the current step (one planning per PLANNING_INTERVAL actions)
         state = self._ensure_state(context.context_id)
         logger.info(f"Number of steps: {state}")
         # Decide whether to insert a plan
-        logger.info(f"Insert plan decision: {self._insert_plan(state)}")
+
+        # Enforce max steps across the conversation
+        if state["step_number"] > MAX_STEPS:
+            logger.warning(f"Max steps ({MAX_STEPS}) reached, returning empty FINAL_ANSWER")
+            tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+            metadata = {
+                "model": self._get_effective_model_name(),
+                "input_tokens": tokens["input_tokens"],
+                "output_tokens": tokens["output_tokens"],
+            }
+            fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
+            await event_queue.enqueue_event(
+                new_agent_text_message(
+                    "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
+                    context_id=context.context_id,
+                )
+            )
+            self.ctx_id_to_messages.pop(context.context_id, None)
+            self.ctx_id_to_state.pop(context.context_id, None)
+            self.ctx_id_to_tokens.pop(context.context_id, None)
+            return
 
         messages = self.ctx_id_to_messages[context.context_id]
         messages.append({"role": "user", "content": user_input})
@@ -335,16 +451,16 @@ class CoreBenchPurpleAgent(AgentExecutor):
 
         did_plan = False
         for turn in range(max_turns):
-            logger.info(f"--- Turn {turn + 1}/{max_turns} ---")
             try:
                 # Insert plan if it is the right step
                 if not did_plan and self._insert_plan(state):
                     # Generate and insert plan
                     plan_text = self._generate_plan(context.context_id, user_input, state, messages)
                     messages.append({"role": "assistant", "content": f"[PLAN]\n{plan_text}"})
-                    logger.info(f"Plan: {plan_text}")
-                    logger.info(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
+                    self._log_plan_summary(plan_text)
+                    logger.debug(f"Entire messages after plan insertion: {json.dumps(messages, indent=2)}")
                     state["last_planned_step"] = state["step_number"]
+                    state["pending_plan"] = plan_text # Store plan to attach to next tool response
                     did_plan = True
 
                 logger.debug(f"Sending {len(messages)} messages to LLM")
@@ -413,10 +529,36 @@ class CoreBenchPurpleAgent(AgentExecutor):
                         response = completion(**self._completion_kwargs(messages))
                         self._track_tokens(context.context_id, response)
 
-                        assistant_content = response.choices[0].message.content
+                        follow_up_message = response.choices[0].message
+                        assistant_content = follow_up_message.content
+
+                        # Handle case where follow-up also returns reasoning but no content
                         if assistant_content is None:
-                            logger.error("Follow-up request also returned no content!")
-                            raise ValueError("Both initial and follow-up responses had no content")
+                            follow_up_reasoning = getattr(follow_up_message, 'reasoning_content', None)
+                            if follow_up_reasoning:
+                                logger.warning("Follow-up also returned reasoning without content, reprompting")
+                                logger.debug(f"Follow-up reasoning: {follow_up_reasoning}")
+                                # Add the reasoning to history and prompt again
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": f"[Follow-up reasoning: {follow_up_reasoning}]"
+                                })
+                                messages.append({
+                                    "role": "user",
+                                    "content": (
+                                        "Please stop reasoning and provide the actual JSON tool call now:\n\n"
+                                        "<json>\n"
+                                        "{\n"
+                                        '  "name": "tool_name",\n'
+                                        '  "arguments": {...}\n'
+                                        "}\n"
+                                        "</json>"
+                                    )
+                                })
+                                continue
+                            else:
+                                logger.error("Follow-up request also returned no content and no reasoning!")
+                                raise ValueError("Both initial and follow-up responses had no content")
                     else:
                         logger.error("Assistant content is None and no reasoning_content!")
                         logger.error(f"Message: {message}")
@@ -453,6 +595,39 @@ Example:
                     })
                     continue
 
+                # Check if FINAL_ANSWER indicates giving up
+                if tool_call.get("name") == "FINAL_ANSWER":
+                    answer_content = tool_call.get("arguments", {}).get("content")
+                    is_giving_up, feedback = self._check_if_giving_up(context.context_id, answer_content)
+                    if is_giving_up:
+                        logger.warning(f"FINAL_ANSWER rejected (giving up): {feedback}")
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Your answer was rejected: {feedback}\n\n"
+                                "All tasks are possible to complete. You must not give up. "
+                                "Try a completely different approach to find the answer. "
+                                "Respond with a tool call to continue working on the task."
+                            ),
+                        })
+                        continue
+
+                    # Validate dictionary keys if the task prompt contains dict_keys(...)
+                    task_prompt = self.ctx_id_to_task_prompt.get(context.context_id, "")
+                    expected_keys = self._extract_dict_keys(task_prompt)
+                    if expected_keys:
+                        key_error = self._validate_answer_keys(answer_content, expected_keys)
+                        if key_error:
+                            logger.warning(f"FINAL_ANSWER rejected (key validation): {key_error}")
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"Your answer was rejected: {key_error}\n\n"
+                                    "Please fix your answer and resubmit with the correct dictionary format."
+                                ),
+                            })
+                            continue
+
                 # Add token metadata for FINAL_ANSWER
                 if tool_call.get("name") == "FINAL_ANSWER":
                     tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
@@ -463,8 +638,11 @@ Example:
                     }
                     logger.info(f"Adding token metadata to FINAL_ANSWER: {tool_call['arguments']['_metadata']}")
 
+                # Attach plan to response so it can be added to traces
+                pending_plan = state.pop("pending_plan", None)
+                plan_block = f"<plan>\n{pending_plan}\n</plan>\n" if pending_plan else ""
                 # Always forward tool intent verbatim
-                formatted = "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
+                formatted = plan_block + "<json>\n" + json.dumps(tool_call, indent=2) + "\n</json>"
                 logger.info(f"Sending tool call: {tool_call.get('name', 'unknown')}")
 
                 await event_queue.enqueue_event(
@@ -473,7 +651,6 @@ Example:
                         context_id=context.context_id,
                     )
                 )
-                logger.info("Response sent successfully")
                 
                 # Cleanup: Free memory after conversation ends (FINAL_ANSWER means task complete).
                 # Without this, ctx_id_to_messages grows indefinitely across capsules.
@@ -481,6 +658,7 @@ Example:
                     self.ctx_id_to_messages.pop(context.context_id, None)
                     self.ctx_id_to_state.pop(context.context_id, None)
                     self.ctx_id_to_tokens.pop(context.context_id, None)
+                    self.ctx_id_to_task_prompt.pop(context.context_id, None)
                 else:
                     state["step_number"] += 1
                 return
@@ -490,11 +668,16 @@ Example:
                 logger.error(f"Error type: {type(e).__name__}")
                 logger.debug(traceback.format_exc())
                 
+                tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+                metadata = {
+                    "model": self._get_effective_model_name(),
+                    "input_tokens": tokens["input_tokens"],
+                    "output_tokens": tokens["output_tokens"],
+                }
+                fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
                 await event_queue.enqueue_event(
                     new_agent_text_message(
-                        "<json>\n"
-                        '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
-                        "</json>",
+                        "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
                         context_id=context.context_id,
                     )
                 )
@@ -506,11 +689,16 @@ Example:
 
         # If internal retries are exhausted without producing valid JSON, send a complaint fallback.
         logger.error("Exhausted max turns without producing a valid JSON tool call so returning empty FINAL_ANSWER")
+        tokens = self.ctx_id_to_tokens.get(context.context_id, {"input_tokens": 0, "output_tokens": 0})
+        metadata = {
+            "model": self._get_effective_model_name(),
+            "input_tokens": tokens["input_tokens"],
+            "output_tokens": tokens["output_tokens"],
+        }
+        fallback = {"name": "FINAL_ANSWER", "arguments": {"content": {}, "_metadata": metadata}}
         await event_queue.enqueue_event(
             new_agent_text_message(
-                "<json>\n"
-                '{"name": "FINAL_ANSWER", "arguments": {"content": {}}}\n'
-                "</json>",
+                "<json>\n" + json.dumps(fallback, indent=2) + "\n</json>",
                 context_id=context.context_id,
             )
         )
@@ -529,6 +717,20 @@ Example:
 # =========================
 
 def prepare_agent_card(url: str) -> AgentCard:
+    """
+    Construct and return an AgentCard describing the CoreBench Purple Agent.
+
+    This AgentCard is used for agent discovery and capability advertisement.
+    It declares the agent as a reasoning-only component that emits structured
+    tool intent but does not execute tools itself.
+
+    Args:
+        url: URL where the agent can be reached
+
+    Returns:
+        An AgentCard instance fully describing the CoreBench Purple Agent,
+        including its skills, capabilities, and supported I/O modes.
+    """
     skill = AgentSkill(
         id="corebench_reasoning",
         name="CoreBench Task Reasoning",
