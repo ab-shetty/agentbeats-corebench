@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import sys
 
 import re
 
@@ -30,6 +31,11 @@ from scenarios.corebench.metrics.models import (
 logger = logging.getLogger("evaluator.metrics")
 
 _VISION_KEY_PATTERN = re.compile(r"^\s*fig(?:ure)?s?\b", re.IGNORECASE)
+
+# Float tolerance for interval comparisons (scaled from machine epsilon)
+# N = 1e5 → rel_tol ≈ 2e-11, abs_tol ≈ 2e-11
+_REL_TOL = 1e5 * sys.float_info.epsilon
+_ABS_TOL = 1e5 * sys.float_info.epsilon
 
 def _is_vision_question(key: str) -> bool:
     """Check if question requires vision tool based on regex pattern in CORE-Bench paper"""
@@ -260,7 +266,13 @@ def _evaluate_numeric(
         )
 
     # Explicit bool() to ensure Python bool, not numpy.bool_
-    correct = bool(interval["lower"] <= submitted <= interval["upper"])
+    lower = interval["lower"]
+    upper = interval["upper"]
+    correct = bool(
+        (lower <= submitted <= upper)
+        or math.isclose(submitted, lower, rel_tol=_REL_TOL, abs_tol=_ABS_TOL)
+        or math.isclose(submitted, upper, rel_tol=_REL_TOL, abs_tol=_ABS_TOL)
+    )
 
     # Log scale mismatches for debugging (agent got correct value but wrong scale)
     if not correct:
