@@ -307,7 +307,6 @@ class SimpleMCPClient:
             raise RuntimeError(f"Initialize failed: {init_response['error']}")
         
         self.server_info = init_response["result"].get("serverInfo", {})
-        # logger.info(f"MCP server info: {self.server_info}")
         
         # List tools
         tools_response = await self._send_request("tools/list", {})
@@ -316,7 +315,6 @@ class SimpleMCPClient:
         if "result" in tools_response:
             self.tools = tools_response["result"].get("tools", [])
         
-        # logger.info(f"MCP client connected with {len(self.tools)} tools")
         for tool in self.tools:
             tool_name = tool.get('name') if isinstance(tool, dict) else str(tool)
             logger.debug(f"  - {tool_name}")
@@ -401,7 +399,6 @@ class SimpleMCPClient:
     
     async def disconnect(self):
         """Clean up server process"""
-        # logger.info("Disconnecting MCP client")
         if self.process and self.process.poll() is None:
             self.process.terminate()
             try:
@@ -411,8 +408,6 @@ class SimpleMCPClient:
                 logger.warning("MCP server didn't terminate, killing")
                 self.process.kill()
                 self.process.wait()
-        # logger.info("MCP client disconnected")
-
 
 def mcp_tools_to_str(mcp_tools: list) -> str:
     """Convert MCP tools to a readable format for the agent."""
@@ -572,7 +567,6 @@ def get_tasks(task_set_name: str) -> list[dict]:
     with open(core_test_path, 'r') as f:
         dataset = json.load(f)
     
-    # logger.info(f"Loaded {len(dataset)} tasks")
     return dataset
 
 
@@ -609,7 +603,6 @@ def get_task_ids(domain: str, task_ids: Optional[list[str]], num_tasks: Optional
     if task_index is not None and 0 <= task_index < len(selected_tasks):
         selected_tasks = [selected_tasks[task_index]]
     
-    # logger.info(f"Selected {len(selected_tasks)} tasks")
     return selected_tasks
 
 
@@ -1416,7 +1409,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 args_preview = json.dumps(action.arguments, indent=2, default=str)
                 if len(args_preview) > 500:
                     args_preview = args_preview[:500] + "\n   ... (truncated)"
-                logger.info(f"   Arguments: {args_preview}")
+                logger.debug(f"   Arguments: {args_preview}")
 
             if tool_result is not None:
                 result_preview = tool_result[:300] + "..." if len(tool_result) > 300 else tool_result
@@ -1439,42 +1432,42 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     
                     # Show command and exit status
                     status = f"✓ Exit {exit_code}" if exit_code == 0 else f"❌ Exit {exit_code}"
-                    logger.info(f"🔧 bash finished: {cmd_display} → {status}")
+                    logger.debug(f"🔧 bash finished: {cmd_display} → {status}")
                     
                     # Show truncated output (first 3 lines)
                     output_lines = tool_result.split('\n')
                     if len(output_lines) > 5:
                         preview = '\n'.join(output_lines[:5])
-                        logger.info(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
+                        logger.debug(f"   Output: {preview}\n   ... ({len(output_lines)} lines total)")
                     elif tool_result.strip():
-                        logger.info(f"   Output: {tool_result[:200]}")
+                        logger.debug(f"   Output: {tool_result[:200]}")
                         
                 elif action.name == "inspect_file_as_text":
                     file_path = action.arguments.get("file_path", "")
                     file_size = len(tool_result)
                     num_lines = tool_result.count('\n')
-                    logger.info(f"🔧 inspect_file_as_text: {file_path} → {file_size} bytes, {num_lines} lines")
+                    logger.debug(f"🔧 inspect_file_as_text: {file_path} → {file_size} bytes, {num_lines} lines")
                     
                 elif action.name == "query_vision_language_model":
                     image_path = action.arguments.get("image_path", "")
                     question = action.arguments.get("question", "")
                     question_display = question[:60] + "..." if len(question) > 60 else question
-                    logger.info(f"🔧 query_vision_language_model: {image_path}")
-                    logger.info(f"   Question: {question_display}")
-                    logger.info(f"   Answer: {tool_result[:250]}")
+                    logger.debug(f"🔧 query_vision_language_model: {image_path}")
+                    logger.debug(f"   Question: {question_display}")
+                    logger.debug(f"   Answer: {tool_result[:250]}")
                     
                 elif action.name == "web_search":
                     query = action.arguments.get("query", "")
-                    logger.info(f"🔧 web_search: {query}")
-                    logger.info(f"   Result: {tool_result[:250]}")
+                    logger.debug(f"🔧 web_search: {query}")
+                    logger.debug(f"   Result: {tool_result[:250]}")
                     
                 else:
                     # Generic catch all for all other tools
                     logger.info(f"🔧 {action.name}")
                     if tool_result and len(tool_result) > 100:
-                        logger.info(f"   Result: {tool_result[:200]}...")
+                        logger.debug(f"   Result: {tool_result[:200]}...")
                     elif tool_result:
-                        logger.info(f"   Result: {tool_result}")
+                        logger.debug(f"   Result: {tool_result}")
                 
                 # Capture tool result in trace
                 if trace:
@@ -1513,7 +1506,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 
                 # Single consolidated FINAL_ANSWER log
                 logger.info(f"📤 FINAL_ANSWER received (type={type(answer)})")
-                logger.info(f"   Content: {answer}")
+                logger.debug(f"   Content: {answer}")
                 if answer_metadata:
                     logger.info(f"   Metadata: {answer_metadata}")
                 
@@ -1621,10 +1614,18 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             exp_str = str(expected_val)[:50] + "..." if len(str(expected_val)) > 50 else str(expected_val)
             sub_str = str(submitted_val)[:50] + "..." if len(str(submitted_val)) > 50 else str(submitted_val)
             key_display = f"Q{i}: {key[:35]}..." if len(key) > 35 else f"Q{i}: {key}"
-            logger.info(f"   {match} {key_display}")
-            logger.info(f"      Expected:  {exp_str}")
-            logger.info(f"      Submitted: {sub_str}")
-           
+            logger.debug(f"   {match} {key_display}")
+            logger.debug(f"      Expected:  {exp_str}")
+            logger.debug(f"      Submitted: {sub_str}")
+
+        
+        #  REPRODUCIBILITY
+        reproducibility_metrics: Optional[ReproducibilityMetrics] = None
+        if check_reproducibility:
+            reproducibility_metrics = evaluate_reproducibility(self._workspace_dir)
+            status = "✅" if reproducibility_metrics.success else "❌"
+            logger.info(f"   Reproducibility: {status} {reproducibility_metrics.reason}")
+            
         # Count command timeouts for task adherence context
         command_timeouts = sum(
             1 for r in tool_result_events

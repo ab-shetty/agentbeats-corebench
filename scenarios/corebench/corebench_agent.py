@@ -395,9 +395,9 @@ class CoreBenchPurpleAgent(AgentExecutor):
                 truncated = stripped[:120] + ('...' if len(stripped) > 120 else '')
                 summary_lines.append(truncated)
 
-        logger.info(f"🤔 [PLAN] Generated ({len(lines)} lines):")
+        logger.info(f"[PLAN] Generated ({len(lines)} lines):")
         for line in summary_lines[:PLAN_LOG_MAX_LINES]:
-            logger.info(f"  {line}")
+            logger.debug(f"  {line}")
 
     # -------------------------
     # Main execution loop
