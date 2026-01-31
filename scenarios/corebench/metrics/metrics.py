@@ -23,7 +23,6 @@ from scenarios.corebench.metrics.models import (
     ErrorRecoveryMetrics,
     MethodologyScoreBreakdown,
     MethodologyMetrics,
-    EfficiencyMetrics,
     TaskEvaluation,
     AggregateMetrics,
 )
@@ -741,38 +740,6 @@ async def evaluate_task_adherence(
             status="error",
             error_message=str(e),
         )
-
-
-# =============================================================================
-# EFFICIENCY METRICS
-# =============================================================================
-
-def compute_efficiency(
-    steps_used: int,
-    max_steps: int,
-    tool_calls_count: int,
-    time_seconds: float,
-    protocol_errors: int,
-    command_timeouts: int = 0,
-) -> EfficiencyMetrics:
-    """
-    Compute efficiency metrics for the task execution.
-    
-    Args:
-        steps_used: Number of interaction steps taken
-        max_steps: Maximum allowed steps
-        tool_calls_count: Number of tool calls made (excludes FINAL_ANSWER)
-        time_seconds: Total time taken in seconds
-        protocol_errors: Number of protocol/format errors
-    """
-    return EfficiencyMetrics(
-        steps_used=steps_used,
-        max_steps=max_steps,
-        tool_calls=tool_calls_count,
-        time_seconds=time_seconds,
-        protocol_errors=protocol_errors,
-        command_timeouts=command_timeouts,
-    )
 
 
 # =============================================================================
@@ -1684,9 +1651,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
             execution_attempt_rate=0.0,
             successful_execution_rate=0.0,
             mean_error_recovery_rate=0.0,
-            mean_steps=0.0,
-            mean_tool_calls=0.0,
-            mean_time=0.0,
             task_results={},
             error_type_distribution={},
         )
@@ -1717,11 +1681,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
         successful_execution_rate = 0.0
         mean_error_recovery_rate = 0.0
 
-    # Efficiency
-    mean_steps = np.mean([e.efficiency.steps_used for e in evaluations])
-    mean_tools = np.mean([e.efficiency.tool_calls for e in evaluations])
-    mean_time = np.mean([e.efficiency.time_seconds for e in evaluations])
-
     # Per-task summary
     task_results = {
         e.task_id: {
@@ -1729,7 +1688,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
             "accuracy": float(e.accuracy.accuracy),
             "adherence": float(e.task_adherence.score),
             "methodology_score": round(float(e.methodology_metrics.methodology_score), 4) if e.methodology_metrics else None,
-            "time_seconds": float(e.efficiency.time_seconds),
         }
         for e in evaluations
     }
@@ -1754,9 +1712,6 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
         execution_attempt_rate=float(execution_attempt_rate),
         successful_execution_rate=float(successful_execution_rate),
         mean_error_recovery_rate=float(mean_error_recovery_rate),
-        mean_steps=float(mean_steps),
-        mean_tool_calls=float(mean_tools),
-        mean_time=float(mean_time),
         task_results=task_results,
         error_type_distribution=error_type_distribution,
     )

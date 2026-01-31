@@ -185,29 +185,6 @@ class MethodologyMetrics:
 
 
 @dataclass
-class EfficiencyMetrics:
-    """Resource efficiency metrics.
-
-    Tracks resource usage including steps, tool calls, time, and errors.
-    The command_timeouts field is useful for identifying when agents hit
-    infrastructure limits (e.g., slow Docker/emulation on ARM64).
-    """
-    steps_used: int
-    max_steps: int
-    tool_calls: int
-    time_seconds: float
-    protocol_errors: int
-    command_timeouts: int = 0  # Commands that hit timeout limit
-
-    @property
-    def step_efficiency(self) -> float:
-        """Fraction of max steps NOT used (higher = more efficient)."""
-        if self.max_steps == 0:
-            return 0.0
-        return 1.0 - (self.steps_used / self.max_steps)
-
-
-@dataclass
 class TaskEvaluation:
     """Complete evaluation result for a single task."""
     task_id: str
@@ -216,7 +193,6 @@ class TaskEvaluation:
 
     accuracy: AccuracyMetrics
     task_adherence: TaskAdherenceMetrics
-    efficiency: EfficiencyMetrics
 
     # Raw data for debugging
     submitted_answer: Any
@@ -239,7 +215,6 @@ class TaskEvaluation:
             "success": self.success,
             "accuracy": asdict(self.accuracy),
             "task_adherence": asdict(self.task_adherence),
-            "efficiency": asdict(self.efficiency),
             "task_cost": self.task_cost,
             "methodology_metrics": asdict(self.methodology_metrics) if self.methodology_metrics else None,
         })
@@ -269,10 +244,6 @@ class AggregateMetrics:
     execution_attempt_rate: float
     successful_execution_rate: float
     mean_error_recovery_rate: float
-
-    mean_steps: float
-    mean_tool_calls: float
-    mean_time: float
 
     task_results: dict[str, dict]
 

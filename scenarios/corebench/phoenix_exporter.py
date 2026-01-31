@@ -272,15 +272,6 @@ def export_trace(
                     if adherence.get("error_message"):
                         summary_span.set_attribute("eval.adherence.error_message", adherence["error_message"])
 
-                    # Efficiency
-                    efficiency = eval_data.get("efficiency", {})
-                    summary_span.set_attribute("eval.efficiency.steps_used", efficiency.get("steps_used", 0))
-                    summary_span.set_attribute("eval.efficiency.max_steps", efficiency.get("max_steps", 0))
-                    summary_span.set_attribute("eval.efficiency.tool_calls", efficiency.get("tool_calls", 0))
-                    summary_span.set_attribute("eval.efficiency.time_seconds", efficiency.get("time_seconds", 0))
-                    summary_span.set_attribute("eval.efficiency.protocol_errors", efficiency.get("protocol_errors", 0))
-                    summary_span.set_attribute("eval.efficiency.command_timeouts", efficiency.get("command_timeouts", 0))
-
                     # Methodology
                     methodology = eval_data.get("methodology_metrics", {})
                     if methodology:

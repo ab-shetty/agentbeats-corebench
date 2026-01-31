@@ -67,12 +67,10 @@ from shared_logging import setup_logging
 from scenarios.corebench.metrics.metrics import (
     evaluate_accuracy,
     evaluate_task_adherence,
-    compute_efficiency,
     aggregate_results,
     extract_methodology_metrics,
     AccuracyMetrics,
     TaskAdherenceMetrics,
-    EfficiencyMetrics,
     _empty_accuracy_metrics,
 )
 from scenarios.corebench.metrics.models import (
@@ -974,7 +972,6 @@ class CoreBenchEvaluator(GreenAgent):
                     logger.info(f"✅ Task {task_id} Complete:")
                     logger.info(f"   Accuracy: {task_evaluation.accuracy.accuracy:.1%} ({task_evaluation.accuracy.correct_answers}/{task_evaluation.accuracy.total_questions})")
                     logger.info(f"   Task Adherence: {task_evaluation.task_adherence.score:.2f}/1.0")
-                    logger.info(f"   Steps: {task_evaluation.efficiency.steps_used}/{max_steps}")
                     # Show violations prominently if any
                     if task_evaluation.methodology_metrics and task_evaluation.methodology_metrics.violations:
                         violations_str = ', '.join(task_evaluation.methodology_metrics.violations)
@@ -993,7 +990,7 @@ class CoreBenchEvaluator(GreenAgent):
                             logger.warning(f"Failed to clean up environment: {cleanup_err}")
                     # Create a failed evaluation
                     from scenarios.corebench.metrics.metrics import (
-                        AccuracyMetrics, TaskAdherenceMetrics, EfficiencyMetrics, _empty_accuracy_metrics
+                        AccuracyMetrics, TaskAdherenceMetrics, _empty_accuracy_metrics
                     )
                     failed_eval = TaskEvaluation(
                         task_id=task_id,
@@ -1003,10 +1000,6 @@ class CoreBenchEvaluator(GreenAgent):
                         task_adherence=TaskAdherenceMetrics(
                             score=0.0,
                             reasoning=f"Task failed: {e}", strengths=[], weaknesses=["Task execution failed"]
-                        ),
-                        efficiency=EfficiencyMetrics(
-                            steps_used=0, max_steps=max_steps, tool_calls=0,
-                            time_seconds=0.0, protocol_errors=0
                         ),
                         submitted_answer={},
                         ground_truth=task.get("results", [{}]),
@@ -1192,7 +1185,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         This method orchestrates the full task lifecycle:
         1. Setup workspace and download capsule
         2. Interact with purple agent (tool calls loop)
-        3. Evaluate all metrics (accuracy, methodology, adherence, efficiency)
+        3. Evaluate all metrics (accuracy, methodology, adherence)
         4. Cleanup and return structured evaluation
 
         Args:
@@ -1212,7 +1205,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         import platform
         
         logger.info(f"Starting single task: {task_id}")
-        task_start_time = time.time()
 
         terminated = False
 
@@ -1540,9 +1532,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         # =====================================================================
         # EVALUATION PHASE
         # =====================================================================
-        task_end_time = time.time()
-        task_time_seconds = task_end_time - task_start_time
-        
         logger.info(f"\n{'\u2500' * 80}")
         logger.info(f"📊 EVALUATING TASK")
         logger.info(f"{'\u2500' * 80}\n")
@@ -1617,14 +1606,6 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             logger.debug(f"   {match} {key_display}")
             logger.debug(f"      Expected:  {exp_str}")
             logger.debug(f"      Submitted: {sub_str}")
-            
-        # Count command timeouts for task adherence context
-        command_timeouts = sum(
-            1 for r in tool_result_events
-            if r.get("timed_out", False)
-            or "timed out" in str(r.get("summary", "")).lower()
-            or "timeout" in str(r.get("summary", "")).lower()
-        )
 
         # METHODOLOGY METRICS
         logger.info(f"2️⃣  Extracting methodology metrics...")
@@ -1811,28 +1792,15 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     logger.info(f"      {line}")
             logger.info("")
         
-        # EFFICIENCY
-        efficiency_metrics = compute_efficiency(
-            steps_used=steps_used,
-            max_steps=max_steps,
-            tool_calls_count=tool_calls_count,
-            time_seconds=task_time_seconds,
-            protocol_errors=protocol_errors,
-            command_timeouts=command_timeouts,  # For counting timeouts
-        )
-        timeout_info = f", {efficiency_metrics.command_timeouts} timeouts" if efficiency_metrics.command_timeouts else ""
-        logger.info(f"5️⃣  Efficiency: {steps_used}/{max_steps} steps, {tool_calls_count} tools, {task_time_seconds:.1f}s{timeout_info}")
-        
         # Build complete evaluation result
         task_success = accuracy_metrics.accuracy == 1.0
-        
+
         evaluation = TaskEvaluation(
             task_id=task_id,
             domain=domain,
             success=task_success,
             accuracy=accuracy_metrics,
             task_adherence=adherence_metrics,
-            efficiency=efficiency_metrics,
             submitted_answer=reported_result,
             ground_truth=gt_result,
             task_cost=cost_metadata.get("cost") if cost_metadata else None,
