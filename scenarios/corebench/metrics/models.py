@@ -125,13 +125,28 @@ class MethodologyScoreBreakdown:
 
     Shows how each factor contributed to the final methodology score,
     making it easier to understand and debug scoring.
+
+    HARD mode scoring (1.0 max):
+    - doc_read_score (0.15): Reading documentation
+    - script_read_score (0.20): Reading target scripts
+    - execution_coverage_score (0.45): Credit for attempting expected scripts
+      Full proportional credit even if scripts fails to run
+    - successful_execution_score (0.20): Bonus for any script succeeding
+    - error_recovery_score: Logged for debugging but NOT included in score
+    - penalty: For cheating detection (e.g., -0.05 for not installing deps)
+
+    Tier ordering ensures "tried right thing" beats "random luck":
+    1. Expected succeeds: 0.45 + 0.20 = 0.65 (best)
+    2. Expected fails: 0.45 + 0.00 = 0.45
+    3. Random succeeds: 0.15 + 0.20 = 0.35
+    4. Random fails: 0.15 + 0.00 = 0.15 (worst)
     """
     domain: str                          # Which scoring rubric was used
-    doc_read_score: float                # Points from reading documentation
-    script_read_score: float             # Points from reading target scripts
-    execution_coverage_score: float      # Points from execution coverage
-    successful_execution_score: float    # Points from successful execution
-    error_recovery_score: float          # Points from error recovery
+    doc_read_score: float                # Points from reading documentation (HARD: 0.15)
+    script_read_score: float             # Points from reading target scripts (HARD: 0.20)
+    execution_coverage_score: float      # Credit for attempting expected scripts (HARD: 0.45)
+    successful_execution_score: float    # Bonus for any script succeeding (HARD: 0.20)
+    error_recovery_score: float          # Logged only, not in HARD mode score
     penalty: float                       # Any penalties applied (negative)
     total: float                         # Final score after all components
 

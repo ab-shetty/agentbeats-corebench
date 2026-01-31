@@ -63,27 +63,25 @@ The final `methodology_score` (0.0–1.0) reflects process quality, independent 
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────────┐                                            │
-│  │ Doc Reading 10% │  Read README.md?                           │
-│  └────────┬────────┘  YES → +0.10 | NO → +0.00                  │
+│  │ Doc Reading 15% │  Read README.md?                           │
+│  └────────┬────────┘  YES → +0.15 | NO → +0.00                  │
 │           │                                                     │
 │  ┌────────▼────────┐                                            │
 │  │Script Reading20%│  Read target script?                       │
 │  └────────┬────────┘  YES → +0.20 | NO → +0.00                  │
 │           │                                                     │
-│  ┌────────▼────────┐  Did it execute scripts?                   │
-│  │Exec Coverage 30%│  YES → +0.30 × (executed / expected)       │
-│  └────────┬────────┘  NO but attempted? → +0.15 (partial)       │
+│  ┌────────▼────────┐  Did it attempt expected scripts?          │
+│  │Script Attempt45%│  YES → +0.45 × (attempted / expected)      │
+│  └────────┬────────┘  Wrong script? → +0.15 (partial)           │
 │           │           NO attempt → +0.00                        │
 │           │                                                     │
+│  ┌────────▼────────┐                                            │
+│  │ Run Success 20% │  At least one script succeeded?            │
+│  └────────┬────────┘  YES → +0.20 | NO → +0.00                  │
 │           │                                                     │
 │  ┌────────▼────────┐                                            │
-│  │Successful Ex 30%│  At least one script succeeded?            │
-│  └────────┬────────┘  YES → +0.30 | NO → +0.00                  │
-│           │                                                     │
-│  ┌────────▼────────┐  persistence_score × 0.10                  │
-│  │Error Recovery10%│  NO errors → 1.0 (full points)             │
-│  └────────┬────────┘  Errors recovered → higher score           │
-│           │           Max failures streak → lower score         │
+│  │  Error Info     │  Logged for diagnostics only               │
+│  └────────┬────────┘  (does NOT affect score)                   │
 │           │                                                     │
 │  ┌────────▼────────┐                                            │
 │  │    Penalties    │  No deps install + failed exec? → -0.05    │
@@ -93,6 +91,8 @@ The final `methodology_score` (0.0–1.0) reflects process quality, independent 
 │  ┌─────────────────┐                                            │
 │  │  FINAL SCORE    │  Sum all components, clamp to [0.0, 1.0]   │
 │  └─────────────────┘                                            │
+│                                                                 │
+│  KEY: "Tried right thing" (0.45) beats "random luck" (0.35)     │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -173,31 +173,23 @@ Agent should read results, NOT execute code.
                     └──────────┬──────────┘
                                │
                     ┌──────────▼──────────┐
-                    │  Is list empty?     │
+                    │ Compare with        │
+                    │ executed_scripts    │
                     └──────────┬──────────┘
                                │
               ┌────────────────┴────────────────┐
-              │ YES                             │ NO
               ▼                                 ▼
-    ┌─────────────────┐               ┌─────────────────┐
-    │  Vague prompt   │               │ Compare with    │
-    │ (no script name)│               │ executed_scripts│
-    └────────┬────────┘               └────────┬────────┘
+       ┌────────────┐                    ┌────────────┐
+       │ Ran right  │                    │ Ran wrong  │
+       │  script?   │                    │  script?   │
+       └─────┬──────┘                    └─────┬──────┘
              │                                 │
-    ┌────────▼────────┐          ┌─────────────┴─────────────┐
-    │successful_exec? │          │                           │
-    └────────┬────────┘          ▼                           ▼
-             │            ┌────────────┐              ┌────────────┐
-    YES: "success"        │ Ran right  │              │ Ran wrong  │
-    NO but tried:"failed" │  script?   │              │  script?   │
-    NO never tried:       └─────┬──────┘              └─────┬──────┘
-      "no_attempt"              │                           │
-                    ┌───────────┴───────────┐               │
-                    ▼                       ▼               ▼
-              ┌──────────┐           ┌──────────┐    ┌──────────────┐
-              │ SUCCESS  │           │ PARTIAL  │    │ WRONG_SCRIPT │
-              │ (all ran)│           │(some ran)│    │              │
-              └──────────┘           └──────────┘    └──────────────┘
+  ┌──────────┴──────────┐                      │
+  ▼                     ▼                      ▼
+┌──────────┐     ┌──────────┐          ┌──────────────┐
+│ SUCCESS  │     │ PARTIAL  │          │ WRONG_SCRIPT │
+│ (all ran)│     │(some ran)│          │              │
+└──────────┘     └──────────┘          └──────────────┘
 
               If right script attempted but failed:
               ┌──────────────┐
@@ -209,8 +201,6 @@ Agent should read results, NOT execute code.
               │  NO_ATTEMPT  │
               └──────────────┘
 
-    NOTE: Vague prompts get same partial credit (0.15) as non-vague
-          when attempted but failed.
 ```
 
 ## Key Metrics Extracted
@@ -546,14 +536,31 @@ Example:
 │  Task: Run testing.py                                           │
 │  Agent: Ran training.py (failed)                                │
 │                                                                 │
-│  read_documentation:    true   → +0.10                          │
+│  read_documentation:    true   → +0.15                          │
 │  read_target_script:    true   → +0.20                          │
-│  execution_coverage:    0.0    → +0.15 (attempted, partial)     │
+│  attempt_coverage:      0.0    → +0.15 (attempted wrong script) │
 │  successful_execution:  false  → +0.00                          │
-│  error_recovery:        0.2    → +0.02                          │
+│  error_recovery:        (logged only, not scored)               │
 │  penalty:               none   → +0.00                          │
 │                                 ─────                           │
-│  TOTAL:                          0.47                           │
+│  TOTAL:                          0.50                           │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ EXAMPLE: Agent tries right script but fails (hard mode)         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Task: Run analysis.py                                          │
+│  Agent: Read docs, read script, ran analysis.py but it crashed  │
+│                                                                 │
+│  read_documentation:    true   → +0.15                          │
+│  read_target_script:    true   → +0.20                          │
+│  attempt_coverage:      1.0    → +0.45 (tried correct script)   │
+│  successful_execution:  false  → +0.00                          │
+│  error_recovery:        (logged only, not scored)               │
+│                                 ─────                           │
+│  TOTAL:                          0.80                           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -564,13 +571,13 @@ Example:
 │  Task: Run analysis.py                                          │
 │  Agent: Read docs, read script, ran analysis.py successfully    │
 │                                                                 │
-│  read_documentation:    true   → +0.10                          │
+│  read_documentation:    true   → +0.15                          │
 │  read_target_script:    true   → +0.20                          │
-│  execution_coverage:    1.0    → +0.30                          │
-│  successful_execution:  true   → +0.30                          │
-│  error_recovery:        0.5    → +0.05                          │
+│  attempt_coverage:      1.0    → +0.45                          │
+│  successful_execution:  true   → +0.20                          │
+│  error_recovery:        (logged only, not scored)               │
 │                                 ─────                           │
-│  TOTAL:                          0.95                           │
+│  TOTAL:                          1.00                           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```

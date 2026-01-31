@@ -1288,7 +1288,7 @@
         "language": "Python",
         "capsule_title": "Bayesian Social Science Statistics: from the Very Beginning",
         "capsule_id": "capsule-8772484",
-        "task_prompt": "Run the R and Python scripts for chapters 2 through 9, covering simulations, Poisson and Gamma-Poisson models, normal models, mixture distributions, and case studies.",
+        "task_prompt": "Run ch5-normal.model.R using Rscript and Python scripts for chapters 2 through 9, covering simulations, Poisson and Gamma-Poisson models, normal models, mixture distributions, and case studies.",
         "results": [
             {
                 "fig for glassdoor salary, was mean posterior or mean prior higher? ": "posterior"
@@ -1442,7 +1442,7 @@
         "language": "R",
         "capsule_title": "Preventing Sexual Violence -- A Behavioral Problem Without a Behaviorally-Informed Solution",
         "capsule_id": "capsule-3088870",
-        "task_prompt": "Create a figures directory in the results folder, then render the RMarkdown files for descriptive statistics, meta-analysis, appendixes, and exploratory analyses into the results directory.",
+        "task_prompt": "Create a 'figures' directory in the results folder, then run '1-paper-descriptives.Rmd' using Rscript and render it as html, save the output into the results directory.",
         "results": [
             {
                 "fig for categories of behavioral outcomes over time, what is the overall highest count behavior type?": "ideas"
@@ -1461,7 +1461,7 @@
         "language": "Python",
         "capsule_title": "Deep learning-enabled accurate assessment of gait impairments in Parkinson's disease using smartphone videos",
         "capsule_id": "capsule-0152700",
-        "task_prompt": "Check GPU status, run the training, validation, and testing scripts in the Model directory, and execute Python scripts for feature processing, Grad-CAM, severity analysis, and medication response analysis. Finally, generate the chord diagram and copy the README to the results directory.",
+        "task_prompt": "Check GPU status, run the training 'train.sh', validation 'val.sh', and testing scripts 'test.sh' in the Model directory, and execute Python scripts for feature processing, Grad-CAM, severity analysis, and medication response analysis 'Joint_features/severity_ana/joint_feature_severity_spearman_calculation.py' and 'Joint_features/severity_ana/sig_cal.py'. Finally, generate the chord diagram and copy the README to the results directory.",
         "results": [
             {
                 "fig are there more than 2 features with accuracy exceeding 0.4? Respond with yes or no.": "yes",
@@ -1508,7 +1508,7 @@
         "language": "Python",
         "capsule_title": "PM-Score-Net: A Disjoint-Label Multi-Task Learning Framework for Automated Continuous Severity Assessment of Myopic Maculopathy",
         "capsule_id": "capsule-3762736",
-        "task_prompt": "Run the evaluation scripts for the baseline model, ConvNeXt backbone ablation, proposed SCL model, single-task ablation, and external PALM dataset validation. Finally, run the script for statistical rigor and result visualization.",
+        "task_prompt": "Run 'evaluate_task1_only.py', then run 'evaluate_rigor.py'",
         "results": [
             {
                 "What is the Task1_Only macro f1?": 0.7012,
