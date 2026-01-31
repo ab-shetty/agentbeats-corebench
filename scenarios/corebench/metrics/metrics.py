@@ -31,6 +31,13 @@ logger = logging.getLogger("evaluator.metrics")
 
 _VISION_KEY_PATTERN = re.compile(r"^\s*fig(?:ure)?s?\b", re.IGNORECASE)
 
+# Python utility modules that should not be counted as script executions
+# Used by _extract_scripts_from_command() and _is_target_execution()
+_NON_SCRIPT_MODULES = frozenset({
+    'venv', 'pip', 'pytest', 'unittest', 'http', 'json', 'ensurepip',
+    'compileall', 'pdb', 'cprofile', 'profile', 'timeit', 'trace'
+})
+
 def _is_vision_question(key: str) -> bool:
     """Check if question requires vision tool based on regex pattern in CORE-Bench paper"""
     return bool(_VISION_KEY_PATTERN.search(key))
@@ -363,20 +370,9 @@ def _empty_accuracy_metrics() -> AccuracyMetrics:
 # 2. Task instruction (e.g., "Run main.py")
 # 3. Questions to answer (e.g., ["What is the accuracy?", "What is the F1 score?"])
 # 4. Capsule docs: README files from workspace/environment/
-#    - Up to 4 files, max 6KB each, 12KB total
-#    - Shows what documentation was available to the agent
+#    - Shows what documentation was available to the agent and gives context
 # 5. Execution stats: tool_calls_count, command_timeouts
-# 6. Tool interactions: up to 24 tool call/result pairs (truncated)
-#
-# WHAT THE JUDGE DOES NOT RECEIVE (to avoid anchoring bias):
-# - Accuracy scores
-# - Methodology score
-# - The actual answer content
-#
-# NOTE: We do NOT cap scores for process violations (e.g., reading pre-existing
-# results). Task adherence focuses on qualitative assessment: how well did the
-# agent execute, problem-solve, and discover information? This provides debugging
-# feedback, not penalties.
+# 6. Tool interactions: all 40 tool call/result pairs (truncated)
 # =============================================================================
 
 # Domain-specific criteria for LLM judge - only the relevant one is injected
@@ -395,10 +391,11 @@ Understand the codebase → Execute the code → Debug errors if needed → Extr
 
 ## Core Process Scoring Guide (50%)
 Score based on highest milestone achieved:
-- **40-50**: Executed code AND extracted results (full success)
-- **25-39**: Executed code but results incomplete/missing
-- **10-24**: Attempted execution but script failed/crashed
-- **0-9**: Never attempted to run code
+- **45-50**: Executed correct script AND extracted results 
+- **35-44**: Correct approach + strong debugging, even if things didn't work out
+- **25-34**: Executed code but wrong script or incomplete results 
+- **15-24**: Understood codebase but never executed 
+- **0-14**: No meaningful attempt
 
 ## Red Flags
 - Never attempted to run code
@@ -447,7 +444,7 @@ TASK_ADHERENCE_PROMPT = """You are an expert evaluator assessing how well an AI 
 {domain_criteria}
 
 ## Other Components
-- **Problem Solving (25%)**: How well did agent handle errors? (20-25: debugged and persisted, 10-19: tried but gave up, 0-9: no error handling)
+- **Problem Solving (25%)**: How well did agent handle errors? (20-25: debugged effectively OR smooth execution with no errors, 10-19: hit errors, tried to debug but gave up, 0-9: hit errors and made no attempt to resolve them)
 - **Discovery (15%)**: How efficiently did agent find information? (12-15: direct path, 6-11: some wandering, 0-5: lost)
 - **Technical (10%)**: Command correctness, avoiding redundant operations
 
@@ -569,15 +566,12 @@ def _build_tool_interactions(
         lines = [f"[Turn {turn}] {tool}", f"Arguments:\n{args_json}"]
 
         if result:
-            exit_code = result.get("exit_code", None)
             timed_out = result.get("timed_out", False)
             hint = result.get("hint")
             summary = str(result.get("summary", "") or "")
 
             if timed_out:
                 lines.append("⚠️ Command timed out")
-            elif exit_code is not None and exit_code != 0:
-                lines.append(f"Exit code: {exit_code}")
             if summary.strip():
                 lines.append(f"Output:\n{summary}")
             if hint:
@@ -742,27 +736,27 @@ async def evaluate_task_adherence(
         )
 
 
-# =============================================================================
-# PROCESS METRICS (Deterministic Extraction from Traces)
-# =============================================================================
+# ================================================================================================
+# METHODOLOGY METRICS (Deterministic Extraction from Traces)
+# ================================================================================================
 #
 # This section extracts methodology metrics by analyzing tool_call/tool_result traces.
 # Unlike LLM-based evaluation, these metrics are fully deterministic and reproducible.
 #
 # Key behaviors tracked:
-# - Documentation reading (README, REPRODUCING.md)
+# - Documentation reading
 # - Script inspection (understanding what to run)
 # - Execution attempts and success
 # - Dependency installation
-# - Error recovery patterns
+# - Errors encountered
 # - Anti-patterns (e.g., reading pre-existing results before executing)
 
 def _is_documentation(path: str) -> bool:
-    """Check if a file path is documentation (README, REPRODUCING.md, etc.)."""
+    """Check if file path represents a document like README.md"""
     if not path:
         return False
     path_lower = path.lower()
-    basename = os.path.basename(path_lower)
+    filename = os.path.basename(path_lower)
 
     # Direct matches for documentation files
     doc_patterns = [
@@ -770,10 +764,9 @@ def _is_documentation(path: str) -> bool:
         "reproducing.md", "readme.pdf",
     ]
 
-    if basename in doc_patterns or basename.startswith("readme"):
+    if filename in doc_patterns or filename.startswith("readme"):
         return True
 
-    # Note: Correctly detects READMEs in any subdir (e.g., code/README.md) since we only check basename
     return False
 
 
@@ -799,12 +792,10 @@ def _is_target_execution(cmd: str) -> bool:
     if any(pattern in cmd_lower for pattern in r_execution_patterns):
         return True
 
-    # Exclude one-liner debugging commands and pip via python -m
+    # Exclude one-liner debugging commands and specific patterns
     exclusion_patterns = [
         "python -c ",
         "python3 -c ",
-        "python -m pip",
-        "python3 -m pip",
         "/python -m pip",  # Full path python
         "/python3 -m pip",
         "rscript -e ",     # Rscript one-liners for debugging
@@ -813,6 +804,13 @@ def _is_target_execution(cmd: str) -> bool:
     ]
     if any(pattern in cmd_lower for pattern in exclusion_patterns):
         return False
+
+    # Exclude python -m with utility modules in _NON_SCRIPT_MODULES
+    py_m_match = re.search(r"python[0-9.]*\s+-m\s+(\S+)", cmd_lower)
+    if py_m_match:
+        module = py_m_match.group(1).split(".")[0]
+        if module in _NON_SCRIPT_MODULES:
+            return False
 
     # Exclude Rscript package installs and debug commands
     if "rscript" in cmd_lower:
@@ -1143,7 +1141,7 @@ def _compute_error_recovery(
 _MAX_STDOUT_SAMPLE_BYTES = 4096
 
 
-def _parse_expected_scripts(task_prompt: str) -> list[str]:
+def _parse_expected_scripts(task_prompt: str, capsule_id: str = "") -> list[str]:
     """Extract expected script filenames from task_prompt.
 
     Parses script filenames mentioned in the task prompt that the agent should execute.
@@ -1155,15 +1153,55 @@ def _parse_expected_scripts(task_prompt: str) -> list[str]:
         - Shell scripts: .sh
         - R scripts & markdown: .R, .Rmd
 
-    NOT SUPPORTED (4 capsules return empty list, fall back to successful_execution signal):
-        - capsule-8536428: "Run the python files in the folder..." (vague, no specific filenames)
-        - capsule-3593259: "Run 'physalia_automators.reports' as a python module" (module notation)
-        - capsule-2345790: "Run all the .Rmd files..." (vague "all files" pattern)
-        - capsule-5136217: "Run all the .R scripts..." (vague "all files" pattern)
+    For 4 capsules with vague "run all" prompts, we hardcode the intended scripts
+    based on the task_prompt. 
     """
     if not task_prompt:
         return []
 
+    # special cases 
+    # "Run the python files..."
+    if capsule_id == "capsule-8536428":
+        return ["n_gram__combined.py", "empath_train.py"]
+
+    # "Run 'physalia_automators.reports' as a python module"
+    if capsule_id == "capsule-3593259":
+        return ["reports.py"]  # Matches both "reports.py" and module extraction
+
+    # "Run all the .Rmd files using Rscript and render them as html"
+    if capsule_id == "capsule-2345790":
+        return [
+            "Study1-encoding_analyses.Rmd",
+            "Study1-recall_analyses.Rmd",
+            "Study2-encoding_analyses.Rmd",
+            "Study2-recall_analyses.Rmd",
+            "Study3-encoding_analyses.Rmd",
+            "Study3-recall_analyses.Rmd",
+            "Study4-encoding_analyses.Rmd",
+            "Study4-recall_analyses.Rmd",
+            "Study1-2-4-combined_analyses.Rmd",
+            "Publication_figures.Rmd",
+        ]
+
+    # "Run all the .R scripts in the ../code folder"
+    if capsule_id == "capsule-5136217":
+        return [
+            "2_classify_political.R",
+            "3_merge_survey.R",
+            "4_descriptive_analysis.R",
+            "5_custom_panels.R",
+            "6_event_study.R",
+            "7_event_study_party_binsR.R",
+            "8_usage_tables.R",
+            "9_weighted_event_study.R",
+            "10_plot_Gtrends.R",
+            "11_prepare_for_publication.R",
+            "ISSUES_2_classify_political copy.R",
+            "ISSUES_3_merge_survey.R",
+            "ISSUES_4_descriptive_analysis.R",
+        ]
+
+    # general cases
     scripts = []
 
     # Python scripts (.py), ex: "Run step_0_vit_encode.py, then step_1_train.py"
@@ -1206,7 +1244,6 @@ def _extract_executed_scripts(
 
     Tracks both successful executions (exit_code=0) and attempted but failed scripts.
     Also captures stdout from successful script executions for diagnostics.
-
     Uses turn-based matching (not array indices) for robustness.
 
     Args:
@@ -1250,32 +1287,49 @@ def _extract_executed_scripts(
         # Extract script names from the command
         scripts_in_cmd = []
 
-        # Python scripts (.py)
-        # Example: "python script.py", "python3 -u main.py"
+        # Python scripts (.py), ex: "python script.py", "python3 -u main.py"
         py_exec = re.findall(r"python[0-9.]*\s+(?:-[^\s]+\s+)*(\S+\.py)", cmd)
         scripts_in_cmd.extend(py_exec)
 
-        # Shell scripts (.sh)
-        # Example: "bash demo.sh", "./run.sh"
+        # Python modules via -m flag, ex: "python -m package.module", "python3 -m mymodule"
+        # Extracts the last component as "module.py" for matching against expected scripts
+        py_module = re.findall(r"python[0-9.]*\s+(?:-[^\s]+\s+)*-m\s+(\S+)", cmd)
+        for mod in py_module:
+            # Skip utility modules (lowercase for case-insensitive matching)
+            base_module = mod.split(".")[0].lower()
+            if base_module in _NON_SCRIPT_MODULES:
+                continue
+            # Convert "package.subpackage.module" to "module.py"
+            module_name = mod.split(".")[-1] + ".py"
+            scripts_in_cmd.append(module_name)
+
+        # Shell scripts (.sh), ex: "bash demo.sh", "./run.sh"
         sh_exec = re.findall(r"(?:bash\s+|\./)(\S+\.sh)", cmd)
         scripts_in_cmd.extend(sh_exec)
 
-        # Jupyter notebooks (.ipynb)
-        # Example: "jupyter nbconvert --to html --execute notebook.ipynb"
+        # Jupyter notebooks (.ipynb), ex: "jupyter nbconvert --to html --execute notebook.ipynb"
         ipynb_exec = re.findall(r"(?:jupyter|nbconvert)\s+.*?(\S+\.ipynb)", cmd)
         scripts_in_cmd.extend(ipynb_exec)
 
-        # Code Ocean entry point: ./run or bash run (no extension)
+        # Code Ocean entry point ./run or bash run (no extension) (for medium difficulty tasks)
         run_exec = re.findall(r"(?:bash\s+|\./)(run)(?:\s|$)", cmd)
         scripts_in_cmd.extend(run_exec)
 
-        # R scripts (.R) via Rscript
-        # Example: "Rscript analysis.R"
+        # R scripts (.R) via Rscript, ex: "Rscript analysis.R"
         r_exec = re.findall(r"Rscript\s+(?!-e)(?:-[^\s]+\s+)*['\"]?(\S+\.R)\b['\"]?", cmd)
         scripts_in_cmd.extend(r_exec)
 
-        # R Markdown (.Rmd) via rmarkdown::render()
-        # Example: "Rscript -e \"rmarkdown::render('report.Rmd')\""
+        # R scripts via source() in Rscript -e, ex: "Rscript -e \"source('script.R', echo=TRUE)\""
+        source_exec = re.findall(r"source\s*\(\s*['\"]([^'\"]+\.R)['\"]", cmd, re.IGNORECASE)
+        scripts_in_cmd.extend(source_exec)
+
+        # Shell for loops with R script globs, ex: "for f in code/*.R; do ..."
+        # Marks all expected .R scripts as attempted when a glob pattern is used
+        r_glob_match = re.search(r"for\s+\w+\s+in\s+([^\s;]+/\*\.R)", cmd)
+        if r_glob_match:
+            scripts_in_cmd.append("__ALL_R_SCRIPTS__")
+
+        # R Markdown (.Rmd) via rmarkdown::render(), ex: "Rscript -e \"rmarkdown::render('report.Rmd')\""
         rmd_exec = re.findall(r"render\(['\"]([^'\"]+\.Rmd)['\"]", cmd)
         scripts_in_cmd.extend(rmd_exec)
 
@@ -1324,13 +1378,21 @@ def _extract_executed_scripts(
     return unique, unique_failed, total_stdout_bytes, stdout_sample
 
 
-def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: list[str], successful_execution: bool) -> float:
-    """Compute what fraction of expected scripts were executed.
+def _compute_execution_coverage(
+    expected_scripts: list[str],
+    executed_scripts: list[str],
+    successful_execution: bool,
+    attempted_failed_scripts: list[str] | None = None,
+    include_failed_attempts: bool = False,
+) -> float:
+    """Compute what fraction of expected scripts were executed (or attempted).
 
     Args:
         expected_scripts: Scripts parsed from task_prompt
         executed_scripts: Scripts successfully executed
         successful_execution: Whether execution completed successfully (exit code 0)
+        attempted_failed_scripts: Scripts that were attempted but failed
+        include_failed_attempts: If True, count failed attempts toward coverage (for HARD mode)
 
     Returns:
         Coverage from 0.0 to 1.0
@@ -1341,20 +1403,34 @@ def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: l
 
     expected_basenames = {os.path.basename(s) for s in expected_scripts}
     executed_basenames = {os.path.basename(s) for s in executed_scripts}
-    matched = expected_basenames & executed_basenames
+
+    if include_failed_attempts and attempted_failed_scripts:
+        failed_basenames = {os.path.basename(s) for s in attempted_failed_scripts}
+        all_attempted = executed_basenames | failed_basenames
+    else:
+        all_attempted = executed_basenames
+
+    # Handle __ALL_R_SCRIPTS__ marker: when a for-loop glob was used (e.g., "for f in code/*.R"),
+    if "__ALL_R_SCRIPTS__" in all_attempted:
+        all_attempted.discard("__ALL_R_SCRIPTS__")
+        for expected in expected_basenames:
+            if expected.endswith(".R"):
+                all_attempted.add(expected)
+
+    matched = expected_basenames & all_attempted
 
     # Special case: "run" matches "run.sh" (for medium difficulty tasks)
     if "run" in expected_basenames and "run" not in matched:
-        if "run.sh" in executed_basenames:
+        if "run.sh" in all_attempted:
             matched.add("run")
 
-    # Jupyter notebooks with slighly different output names i.e. "Notebook.ipynb" matches "exec_Notebook.ipynb"
+    # Jupyter notebooks with slightly different output names i.e. "Notebook.ipynb" matches "exec_Notebook.ipynb"
     for expected in expected_basenames - matched:
         if not expected.endswith(".ipynb"):
             continue
         expected_stem = expected[:-6]  # Remove ".ipynb"
-        for executed in executed_basenames:
-            if expected_stem in executed and executed.endswith(".ipynb"):
+        for attempted in all_attempted:
+            if expected_stem in attempted and attempted.endswith(".ipynb"):
                 matched.add(expected)
                 break
 
@@ -1363,6 +1439,7 @@ def _compute_execution_coverage(expected_scripts: list[str], executed_scripts: l
 
 def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict],
     domain: str, task_prompt: str = "", deleted_files: list[str] | None = None,
+    capsule_id: str = "",
 ) -> MethodologyMetrics:
     """Extract deterministic process metrics from trace events.
 
@@ -1479,7 +1556,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
     error_recovery = _compute_error_recovery(tool_calls, tool_results)
 
     # Parse expected scripts from task_prompt and extract executed scripts
-    expected_scripts = _parse_expected_scripts(task_prompt)
+    expected_scripts = _parse_expected_scripts(task_prompt, capsule_id)
 
     # Filter out scripts that were deleted by difficulty filter (e.g., run.sh in hard mode)
     # These are impossible to execute, so we shouldn't penalize for not running them
@@ -1503,18 +1580,26 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
     executed_scripts, attempted_failed_scripts, stdout_total_bytes, stdout_sample = _extract_executed_scripts(
         tool_calls, tool_results
     )
-    execution_coverage = _compute_execution_coverage(expected_scripts, executed_scripts, successful_execution)
+
+    # Compute coverage metrics:
+    success_coverage = _compute_execution_coverage(expected_scripts, executed_scripts, successful_execution)
+    attempt_coverage = _compute_execution_coverage(
+        expected_scripts, executed_scripts, successful_execution,
+        attempted_failed_scripts=attempted_failed_scripts,
+        include_failed_attempts=True,
+    )
     stdout_captured = stdout_total_bytes > 0
 
     # Compute methodology score based on domain (violations are tracked separately for diagnostics)
-    methodology_score, score_breakdown = _compute_methodology_score(domain=domain,
+    methodology_score, score_breakdown = _compute_methodology_score(
+        domain=domain,
         read_documentation=read_documentation,
         read_target_script=read_target_script,
         attempted_execution=attempted_execution,
         successful_execution=successful_execution,
         installed_dependencies=installed_dependencies,
         error_recovery=error_recovery,
-        execution_coverage=execution_coverage,
+        attempt_coverage=attempt_coverage,
     )
 
     return MethodologyMetrics(
@@ -1528,7 +1613,7 @@ def extract_methodology_metrics(tool_calls: list[dict], tool_results: list[dict]
         expected_scripts=expected_scripts,
         executed_scripts=executed_scripts,
         attempted_failed_scripts=attempted_failed_scripts,
-        execution_coverage=execution_coverage,
+        execution_coverage=success_coverage,
         stdout_captured=stdout_captured,
         stdout_total_bytes=stdout_total_bytes,
         stdout_sample=stdout_sample,
@@ -1549,22 +1634,30 @@ def _compute_methodology_score(
     successful_execution: bool,
     installed_dependencies: bool,
     error_recovery: ErrorRecoveryMetrics,
-    execution_coverage: float = 0.0,
+    attempt_coverage: float = 0.0,
 ) -> tuple[float, MethodologyScoreBreakdown]:
-    """Compute a deterministic methodology score from 0-1 based on observed behaviors.
-
-    The execution_coverage parameter enables partial credit for running some
-    but not all expected scripts (parsed from task_prompt). This addresses
-    the "stdout problem" where agents may run scripts correctly but not
-    produce expected output files and just write results to stdout instead.
+    """Compute a deterministic methodology score from 0-1 based on observed events.
 
     Scoring weights by domain:
                         EASY    MEDIUM  HARD
-    Doc reading:        100%    25%     10%
-    Script reading:     -       -       20%
-    Exec coverage:      -       35%     30%
-    Successful exec:    -       25%     30%
-    Error recovery:     -       15%     10%
+    Doc reading:        100%    25%     15%
+    Script reading:     -       15%     20%
+    Exec components:    -       60%     65%
+    Error recovery:     -       -       - (logged only)
+
+    Args:
+        attempt_coverage: Fraction of expected scripts attempted, including failures (0.0-1.0)
+
+    HARD mode execution scoring (0.65 total):
+    - attempt_coverage (0.45): Credit for attempting expected scripts
+      Full proportional credit even if scripts fail - running the correct script is the challenge in hardmode. 
+    - successful_execution (0.20): Bonus for any script completing successfully, for creative solutions. 
+
+    Tier ordering ensures "tried right thing" beats "random luck":
+    1. Expected succeeds: 0.45 + 0.20 = 0.65
+    2. Expected fails: 0.45 + 0.00 = 0.45
+    3. Random succeeds: 0.15 + 0.20 = 0.35
+    4. Random fails: 0.15 + 0.00 = 0.15
 
     Returns:
         Tuple of (final_score, breakdown) where breakdown shows each component's contribution.
@@ -1587,34 +1680,35 @@ def _compute_methodology_score(
     elif domain == "corebench_medium":
         if read_documentation:
             doc_read_score = 0.25
-        if execution_coverage > 0:
-            execution_coverage_score = 0.35 * execution_coverage
+        if read_target_script:
+            script_read_score = 0.15
+        if attempt_coverage > 0:
+            execution_coverage_score = 0.40 * attempt_coverage
         elif attempted_execution:
-            execution_coverage_score = 0.35 * 0.5  # Partial credit
+            execution_coverage_score = 0.10  # Partial credit for random/creative script
         if successful_execution:
-            successful_execution_score = 0.25
+            successful_execution_score = 0.20
         error_recovery_score = error_recovery.persistence_score * 0.15
 
     elif domain == "corebench_hard":
         if read_documentation:
-            doc_read_score = 0.10
+            doc_read_score = 0.15
         if read_target_script:
             script_read_score = 0.20
-        if execution_coverage > 0:
-            execution_coverage_score = 0.30 * execution_coverage
+        if attempt_coverage > 0:
+            execution_coverage_score = 0.45 * attempt_coverage  # attempted expected scripts
         elif attempted_execution:
-            execution_coverage_score = 0.30 * 0.5  # Partial credit
+            execution_coverage_score = 0.15  # Partial credit for random/creative script
         if successful_execution:
-            successful_execution_score = 0.30
-        error_recovery_score = error_recovery.persistence_score * 0.10
-
-        # Penalty for not attempting dependency installation when execution failed
+            successful_execution_score = 0.20  # Bonus for any script completing successfully
+        # compute for logging errors encountered but doesn't affect scoring
+        error_recovery_score = error_recovery.persistence_score
+        # Penalty for not attempting dependency installation when execution failed (MIGHT ZERO OUT)
         if not successful_execution and not installed_dependencies and attempted_execution:
             penalty = -0.05
 
     raw_total = (doc_read_score + script_read_score + execution_coverage_score +
-                 successful_execution_score + error_recovery_score + penalty)
-
+                     successful_execution_score + penalty)
     final_score = min(1.0, max(0.0, raw_total))
 
     breakdown = MethodologyScoreBreakdown(
@@ -1685,8 +1779,8 @@ def aggregate_results(evaluations: list[TaskEvaluation]) -> AggregateMetrics:
     task_results = {
         e.task_id: {
             "success": bool(e.success),
-            "accuracy": float(e.accuracy.accuracy),
-            "adherence": float(e.task_adherence.score),
+            "accuracy": round(float(e.accuracy.accuracy), 4),
+            "adherence": round(float(e.task_adherence.score), 4),
             "methodology_score": round(float(e.methodology_metrics.methodology_score), 4) if e.methodology_metrics else None,
         }
         for e in evaluations

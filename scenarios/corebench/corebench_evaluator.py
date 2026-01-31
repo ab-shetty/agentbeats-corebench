@@ -1057,27 +1057,27 @@ class CoreBenchEvaluator(GreenAgent):
                 "domain": domain,
                 "num_tasks": aggregate.num_tasks,
                 "num_successful": aggregate.num_successful,
-                "pass_rate": aggregate.pass_rate,
+                "pass_rate": round(aggregate.pass_rate, 4),
                 "cost_efficiency": round(cost_efficiency, 4) if cost_efficiency is not None else None,  # Dollar cost per task
 
                 # Accuracy metrics
-                "mean_accuracy": aggregate.mean_accuracy,
-                "mean_written_accuracy": aggregate.mean_written_accuracy,
-                "mean_vision_accuracy": aggregate.mean_vision_accuracy,
-                "mean_adherence": aggregate.mean_adherence,
+                "mean_accuracy": round(aggregate.mean_accuracy, 4),
+                "mean_written_accuracy": round(aggregate.mean_written_accuracy, 4),
+                "mean_vision_accuracy": round(aggregate.mean_vision_accuracy, 4),
+                "mean_adherence": round(aggregate.mean_adherence, 4),
 
                 # Methodology metrics (deterministic)
-                "mean_methodology_score": aggregate.mean_methodology_score,
-                "doc_read_rate": aggregate.doc_read_rate,
-                "execution_attempt_rate": aggregate.execution_attempt_rate,
-                "successful_execution_rate": aggregate.successful_execution_rate,
-                "mean_error_recovery_rate": aggregate.mean_error_recovery_rate,
+                "mean_methodology_score": round(aggregate.mean_methodology_score, 4),
+                "doc_read_rate": round(aggregate.doc_read_rate, 4),
+                "execution_attempt_rate": round(aggregate.execution_attempt_rate, 4),
+                "successful_execution_rate": round(aggregate.successful_execution_rate, 4),
+                "mean_error_recovery_rate": round(aggregate.mean_error_recovery_rate, 4),
 
-                "total_time": time_used,
+                "total_time": round(time_used, 2),
                 "used_mcp": use_mcp,
 
                 # Cost tracking
-                "total_cost": total_cost,
+                "total_cost": round(total_cost, 4),
                 "total_input_tokens": total_input_tokens,
                 "total_output_tokens": total_output_tokens,
                 "model_used": model_used,
@@ -1607,6 +1607,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             domain=domain,
             task_prompt=task_prompt,
             deleted_files=deleted_files,
+            capsule_id=task_id,
         )
         # Show script execution info
         executed_list = methodology_metrics.executed_scripts or []
@@ -1652,11 +1653,11 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         if breakdown:
             # Define max weights per domain for display
             if breakdown.domain == "corebench_hard":
-                max_doc, max_script, max_exec, max_success, max_recovery = 0.15, 0.15, 0.30, 0.30, 0.10
+                max_doc, max_script, max_expected, max_success, max_recovery = 0.15, 0.20, 0.45, 0.20, 0.0
             elif breakdown.domain == "corebench_medium":
-                max_doc, max_script, max_exec, max_success, max_recovery = 0.25, 0.0, 0.35, 0.25, 0.15
+                max_doc, max_script, max_expected, max_success, max_recovery = 0.25, 0.0, 0.35, 0.25, 0.15
             else:  # easy
-                max_doc, max_script, max_exec, max_success, max_recovery = 1.0, 0.0, 0.0, 0.0, 0.0
+                max_doc, max_script, max_expected, max_success, max_recovery = 1.0, 0.0, 0.0, 0.0, 0.0
 
             logger.info(f"   Score Breakdown:")
             # Doc read
@@ -1666,52 +1667,75 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             if breakdown.domain == "corebench_hard":
                 scripts_list = ', '.join(methodology_metrics.scripts_read) if methodology_metrics.scripts_read else 'none read'
                 logger.info(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
-            # Exec coverage - show which expected scripts were actually run
+            # Script identification - show which expected scripts were actually run
             expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts} if methodology_metrics.expected_scripts else set()
             executed_basenames = {os.path.basename(s) for s in (methodology_metrics.executed_scripts or [])}
             failed_basenames = {os.path.basename(s) for s in (methodology_metrics.attempted_failed_scripts or [])}
 
-            if methodology_metrics.execution_coverage > 0:
-                if not expected_basenames:
-                    exec_cov_detail = "successful exec (generic task)"
-                else:
-                    matched = expected_basenames & executed_basenames
-                    if matched:
-                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} - matched: {', '.join(sorted(matched))}"
-                    else:
-                        exec_cov_detail = f"{methodology_metrics.execution_coverage:.0%} coverage"
-            elif methodology_metrics.attempted_execution:
-                if not expected_basenames:
-                    exec_cov_detail = "attempted but failed (generic task)"
-                else:
-                    matched_failed = expected_basenames & failed_basenames
-                    if matched_failed:
-                        exec_cov_detail = f"expected script failed ({', '.join(sorted(matched_failed))})"
-                    else:
-                        exec_cov_detail = "ran different script (not expected)"
+            # Filter out __ALL_R_SCRIPTS__ marker (used for for-loop glob scoring in metrics.py)
+            executed_basenames.discard("__ALL_R_SCRIPTS__")
+            failed_basenames.discard("__ALL_R_SCRIPTS__")
+
+            all_attempted = executed_basenames | failed_basenames
+
+            # Build detailed log showing expected vs attempted
+            if expected_basenames:
+                expected_str = ', '.join(sorted(expected_basenames))
             else:
-                exec_cov_detail = "not attempted"
-            logger.info(f"     Exec Coverage:   {breakdown.execution_coverage_score:.2f}/{max_exec:.2f}  ({exec_cov_detail})")
-            # Successful exec - show what actually succeeded
+                expected_str = "(generic task)"
+
+            # Calculate what matched expected scripts (both successful and failed)
+            matched_succeeded = expected_basenames & executed_basenames
+            matched_failed = expected_basenames & failed_basenames
+            unmatched_succeeded = executed_basenames - expected_basenames
+            unmatched_failed = failed_basenames - expected_basenames
+
+            # Build detailed coverage message
+            coverage_parts = []
+            if matched_succeeded:
+                coverage_parts.append(f"✓ ran correct: {', '.join(sorted(matched_succeeded))}")
+            if matched_failed:
+                coverage_parts.append(f"✓ tried correct (failed): {', '.join(sorted(matched_failed))}")
+            if unmatched_succeeded:
+                coverage_parts.append(f"ran other: {', '.join(sorted(unmatched_succeeded))}")
+            if unmatched_failed:
+                coverage_parts.append(f"tried other (failed): {', '.join(sorted(unmatched_failed))}")
+
+            if not coverage_parts:
+                if methodology_metrics.attempted_execution:
+                    coverage_parts.append("attempted execution (script names not captured)")
+                else:
+                    coverage_parts.append("not attempted")
+
+            logger.info(f"     Script Attempt:  {breakdown.execution_coverage_score:.2f}/{max_expected:.2f}  (expected: {expected_str})")
+            for part in coverage_parts:
+                logger.info(f"                                     ({part})")
+            # Execution success bonus - any script completing successfully
             if methodology_metrics.successful_execution:
                 executed_list = methodology_metrics.executed_scripts or []
                 if executed_list:
-                    # Show the script(s) that succeeded
-                    success_scripts = ', '.join(os.path.basename(s) for s in executed_list)
-                    success_detail = f"exit_code=0 ({success_scripts})"
+                    # Check if succeeded scripts are expected or other
+                    success_basenames = {os.path.basename(s) for s in executed_list}
+                    expected_success = success_basenames & expected_basenames
+                    other_success = success_basenames - expected_basenames
+                    success_parts = []
+                    if expected_success:
+                        success_parts.append(f"✓ {', '.join(sorted(expected_success))}")
+                    if other_success:
+                        success_parts.append(f"other: {', '.join(sorted(other_success))}")
+                    success_detail = ', '.join(success_parts) if success_parts else "✓ code executed successfully"
                 else:
-                    success_detail = "exit_code=0"
+                    success_detail = "✓ code executed successfully"
             else:
-                success_detail = "no successful run"
-            logger.info(f"     Successful Exec: {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
-            # Error recovery
+                success_detail = "✗ no successful run"
+            logger.info(f"     Run Success:     {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
+            # Error info
             err = methodology_metrics.error_recovery
             if err.total_errors > 0:
                 error_types_str = ', '.join(f"{k}:{v}" for k, v in err.error_types.items()) if err.error_types else 'unclassified'
-                recovery_pct = (err.errors_recovered / err.total_errors) * 100
-                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  ({err.errors_recovered}/{err.total_errors} = {recovery_pct:.0f}% - {error_types_str})")
+                logger.info(f"     Error Info:      {err.errors_recovered}/{err.total_errors} recovered - {error_types_str}")
             else:
-                logger.info(f"     Error Recovery:  {breakdown.error_recovery_score:.2f}/{max_recovery:.2f}  (no errors)")
+                logger.info(f"     Error Info:      no errors")
             # Penalties
             if breakdown.penalty != 0:
                 logger.info(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")

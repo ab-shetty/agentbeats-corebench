@@ -10,6 +10,20 @@ Validates that Task Adherence scores are reproducible across repeated evaluation
 | gpt-oss:120b | 0.0         | 0.062     | 4/10      |
 
 
+
+### Analysis: LLM Judge Consistency Thresholds
+
+**Metric:** Standard Deviation ($\sigma$) on a normalized 0.0–1.0 scale.
+**Objective:** Evaluation noise must be lower than the signal of model improvement.
+
+| Grade         | Range ($\sigma$) | Interpretation & Source                                                                                                                                                                                                                         |
+| :------------ | :--------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **EXCELLENT** | **< 0.05**       | **Production Grade.** Measurement noise is negligible (<5%), allowing for reliable regression testing. This meets strict [G-Eval standards](https://arxiv.org/abs/2303.16634) for detecting even micro-improvements.                            |
+| **GOOD**      | **< 0.10**       | **Stable.** Acceptable for tracking aggregate trends. While generally reliable, it may occasionally "flip" on borderline cases, aligning with [DeepEval Self-Consistency](https://docs.confident-ai.com/docs/metrics-self-consistency) targets. |
+| **FAIR**      | **< 0.15**       | **High Variance.** The judge disagrees with itself as often as humans do (approaching [Human Inter-Rater Agreement](https://arxiv.org/abs/2306.05685) error rates). Usable only with "Majority Voting" (averaging 3+ runs).                     |
+| **POOR**      | **≥ 0.15**       | **Unusable.** The signal-to-noise ratio is too low. It is impossible to distinguish whether a score change is due to agent performance or evaluator randomness.                                                                                 |
+
+
 ## How to Run Consistency Tests
 ```bash
 # 4 traces, 5 runs each

@@ -9,7 +9,7 @@ As a Green Agent for AgentBeats, CoreBench evaluates Purple Agents on their abil
 | **Accuracy**       | Deterministic | Did the agent get the correct answer?                        |
 | **Methodology**    | Deterministic | Did the agent follow proper scientific reproduction process? |
 | **Task Adherence** | LLM Judge     | How well did the agent execute the task? (qualitative)       |
-| **Efficiency**     | Deterministic | How resource-efficient was the agent?                        |
+
 
 This multi-dimensional approach captures agents that get right answers through wrong methods (high accuracy, low methodology) and agents that follow correct processes but hit environment issues (low accuracy, high methodology).
 
@@ -27,6 +27,8 @@ Interval = mean ± t(0.975, n-1) × std × sqrt(1 + 1/n)
 
 A submitted value is correct if it falls within this interval. For single ground truth values, exact match is used. Scale mismatches (e.g., 0.96 vs 96%) are detected and logged for debugging.
 
+*When Accuracy < 100%, we provide detailed breakdowns of Methodology and Task Adherence to guide improvements.*
+
 ---
 
 ## Methodology Score
@@ -35,13 +37,21 @@ Deterministic scoring based on observable trace events. Answers: *Did the agent 
 
 ### Hard Mode Scoring (Primary)
 
-| Component             | Weight | Criteria                                           |
-| --------------------- | ------ | -------------------------------------------------- |
-| Documentation Reading | 10%    | Read README.md or relevant docs                    |
-| Script Reading        | 20%    | Inspected target script before execution           |
-| Execution Coverage    | 30%    | Ran expected scripts (partial credit for attempts) |
-| Successful Execution  | 30%    | At least one script completed successfully         |
-| Error Recovery        | 10%    | Persisted through errors vs. giving up             |
+| Component             | Weight | Criteria                                                |
+| --------------------- | ------ | ------------------------------------------------------- |
+| Documentation Reading | 15%    | Read README.md or relevant docs                         |
+| Script Reading        | 20%    | Inspected target script before execution                |
+| Execution Coverage    | 45%    | Attempted expected scripts (full credit even if failed) |
+| Successful Execution  | 20%    | At least one script completed successfully              |
+| Error Recovery        | -      | Logged for debugging only, not in score                 |
+
+**Key insight**: In HARD mode, agents get full execution coverage credit for attempting the right script, even if it fails due to environment issues.
+
+**Tier ordering** ensures "tried right thing" beats "random luck":
+1. Expected script succeeds: 45% + 20% = 65%
+2. Expected script fails: 45% + 0% = 45%
+3. Random script succeeds: 15% + 20% = 35%
+4. Random script fails: 15% + 0% = 15%
 
 **Penalty**: −5% if agent failed execution without attempting dependency installation.
 
@@ -91,7 +101,7 @@ Qualitative assessment of execution quality. Provides scores, reasoning, and spe
 
 ### LLM Judge Consistency
 
-Following best practices for LLM-as-judge reliability, we validated consistency across repeated evaluations.
+Following best practices for LLM-as-judge reliability, we validated consistency across repeated evaluations to ensure measurement noise does not exceed the signal of agent improvement.
 
 **Test methodology**: 10 traces × 10 runs per configuration = 100+ evaluations per model.
 
@@ -102,28 +112,14 @@ Following best practices for LLM-as-judge reliability, we validated consistency 
 
 **Recommended configuration**: GPT-5-mini achieves EXCELLENT consistency (σ < 0.05) on all test capsules, with 56% lower variance than alternatives.
 
-**Consistency grades**:
-- EXCELLENT: σ < 0.05 (scores vary ~5% max)
-- GOOD: σ < 0.10 (~10% variance)
-- FAIR: σ < 0.15 (~15% variance)
-- POOR: σ ≥ 0.15 (unreliable)
+#### Consistency Standards & Justification
 
----
-
-## Efficiency
-
-Resource usage during task execution:
-
-| Metric             | Description              |
-| ------------------ | ------------------------ |
-| `steps_used`       | Interaction turns taken  |
-| `tool_calls_count` | Tool invocations         |
-| `time_seconds`     | Total execution time     |
-| `protocol_errors`  | JSON/format errors       |
-| `command_timeouts` | Commands hitting timeout |
-| `token_cost`       | Estimated API cost (USD) |
-
-Token costs are computed from input/output token counts using a model price dictionary, enabling cost-aware evaluation across different LLM backends.
+| Grade         | Range ($\sigma$) | Interpretation & Source                                                                                                                                                                                                                         |
+| :------------ | :--------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **EXCELLENT** | **< 0.05**       | **Production Grade.** Measurement noise is negligible (<5%), allowing for reliable regression testing. This meets strict [G-Eval standards](https://arxiv.org/abs/2303.16634) for detecting even micro-improvements.                            |
+| **GOOD**      | **< 0.10**       | **Stable.** Acceptable for tracking aggregate trends. While generally reliable, it may occasionally "flip" on borderline cases, aligning with [DeepEval Self-Consistency](https://docs.confident-ai.com/docs/metrics-self-consistency) targets. |
+| **FAIR**      | **< 0.15**       | **High Variance.** The judge disagrees with itself as often as humans do (approaching [Human Inter-Rater Agreement](https://arxiv.org/abs/2306.05685) error rates). Usable only with "Majority Voting" (averaging 3+ runs).                     |
+| **POOR**      | **≥ 0.15**       | **Unusable.** The signal-to-noise ratio is too low. It is impossible to distinguish whether a score change is due to agent performance or evaluator randomness.                                                                                 |
 
 ---
 
