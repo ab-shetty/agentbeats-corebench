@@ -1,6 +1,9 @@
 FROM ghcr.io/astral-sh/uv:python3.12-trixie
 
+ARG GPG_PASSPHRASE
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    gnupg \
     r-base \
     libcurl4-openssl-dev \
     libssl-dev \
@@ -53,6 +56,10 @@ RUN \
     uv sync --locked
 
 COPY --chown=agentbeats:agentbeats scenarios scenarios
+
+RUN gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --output scenarios/corebench/core_test.json --decrypt scenarios/corebench/core_test.json.gpg && \
+    gpg --batch --yes --passphrase "$GPG_PASSPHRASE" --output scenarios/corebench/capsule_extension.json --decrypt scenarios/corebench/capsule_extension.json.gpg && \
+    rm scenarios/corebench/core_test.json.gpg scenarios/corebench/capsule_extension.json.gpg
 
 ENTRYPOINT ["uv", "run", "scenarios/corebench/corebench_evaluator.py"]
 CMD ["--host", "0.0.0.0"]
