@@ -28,7 +28,7 @@ uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
 
 ## Custom LLM Configuration
 
-The purple agent uses **Nebius API** `Qwen3-Coder-30B-A3B-Instruct` & **OpenAI API** `gpt5-mini` (for vision only) **by default**. You can customize the LLM model used by the purple agent on the Nebius API in two ways:
+The purple agent uses **Nebius API** `nebius/openai/gpt-oss-120b` & **OpenAI API** `gpt-5-mini` (for vision/judge) **by default**. You can customize the LLM model used by the purple agent on the Nebius API in two ways:
 
    1. Defining an environment variable in `.env`:
    ```bash
@@ -48,7 +48,7 @@ The purple agent uses **Nebius API** `Qwen3-Coder-30B-A3B-Instruct` & **OpenAI A
 Model selection follows this priority (highest to lowest):
 1. CLI `--model` in `scenario.toml` - best for testing different models quickly
 2. `COREBENCH_TEXT_MODEL` env var - good for persistent defaults
-3. Default - `Qwen/Qwen3-Coder-30B-A3B-Instruct`
+3. Default - `nebius/openai/gpt-oss-120b`
 
 <details>
 <summary><strong>Advanced: Self-Hosted vLLM</strong></summary>
@@ -90,30 +90,70 @@ domain = "corebench_easy"  # Options: "corebench_easy", "corebench_medium", "cor
 
 ---
 
+## Leaderboard Panel 
+
+| Task Passed              | Process Score                                           |
+| ------------------------ | ------------------------------------------------------- |
+| Tasks with 100% Accuracy | Aggregate of Methodololgy, Task Adherence, and Accuracy |
+
+
+---
+
 ## Evaluation Metrics
 
-TKTK                                              |
+CoreBench uses three complementary metrics:
+
+| Metric                | Type          | Description                                                                                                                                              |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Accuracy**          | Deterministic | Measures correctness of final answers. Numeric answers use 95% prediction intervals to handle ML stochasticity. Split into written vs. vision questions. |
+| **Methodology Score** | Deterministic | Trace-based evaluation of agent process: Did it read documentation? Execute the right scripts? Recover from errors? Domain-specific scoring weights.     |
+| **Task Adherence**    | LLM-as-Judge  | Qualitative assessment (0-1) of how well the agent followed instructions, navigated the codebase, and solved problems efficiently.                       |
+
+### Methodology Scoring by Difficulty
+
+| Component            | Easy | Medium | Hard |
+| -------------------- | ---- | ------ | ---- |
+| Doc Reading          | 100% | 25%    | 15%  |
+| Script Reading       | -    | 15%    | 20%  |
+| Execution Coverage   | -    | 35%    | 45%  |
+| Successful Execution | -    | 25%    | 20%  |
+
+We've done thourough consistency checks on our LLM-as-a-judge, documented [here](scenarios/corebench/metrics/llm_judge_consistency.md).
 
 ---
 
 ## Results & Logs
 
-You will see real-time evaluation metrics in your terminal (TKTK update): 
+You will see real-time evaluation metrics in your terminal after the benchmark run completes: 
 
 ```text
 ⭐ CoreBench Benchmark Results ⭐
-Domain: corebench_medium
-Tasks: 1/2 passed (50.0%)
+Domain: corebench_hard
+Tasks: 1/5 passed (20.0%)
 
-📊 Metrics:
-  Accuracy: 83.3% (written: 100%, vision: 50.0%)
-  Faithfulness: 0.88
-  Task Adherence: 0.75
-  Reproducibility: 100.0%
+📊 Accuracy Metrics:
+  Accuracy: 20.0%
+  Written: 0.0%, Vision: 20.0%
+
+🔧 Methodology Metrics (Deterministic):
+  Methodology Score: 0.38/1.0
+  Doc Read Rate: 80.0%
+  Execution Attempt Rate: 40.0%
+  Successful Execution Rate: 40.0%
+  Error Recovery Rate: 100.0%
+
+📋 Task Adherence (LLM Judge): 0.54/1.0
+
+⚡ Total Time: 264.1s
+  Cost Efficiency: $0.017900/task (total: $0.0895)
+  Tokens: 475,515 input, 30,284 output
 
 📋 Task Results:
-  capsule-5507257: ✅ (acc=100%, faith=0.95)
-  capsule-3449234: ❌ (acc=66.7%, faith=0.80)
+  capsule-9641396: ✅ (acc=100.0%, process=0.35)
+  capsule-6003668: ❌ (acc=0.0%, process=0.00)
+  capsule-8234136: ❌ (acc=0.0%, process=0.70)
+  capsule-9660931: ❌ (acc=0.0%, process=0.70)
+  capsule-0625246: ❌ (acc=0.0%, process=0.15)
 ```
 Full execution traces are saved to:
 ```
