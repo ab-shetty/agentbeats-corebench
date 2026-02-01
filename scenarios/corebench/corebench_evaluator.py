@@ -444,10 +444,6 @@ with open(CAPSULE_EXTENSION_PATH) as f:
     CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
 logger.info(f"Loaded {len(CAPSULE_LOOKUP)} capsules from manifest")
 
-# with open("./scenarios/corebench/capsule_extension.json") as f:
-#     CAPSULE_LOOKUP = {c["capsule_id"]: c.get("gdrive_file_id") for c in json.load(f)}
-
-
 # ----------------------
 # Helper: Princeton download
 # ----------------------

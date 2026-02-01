@@ -133,8 +133,6 @@ class PlainTextConverter(DocumentConverter):
         # Only accept text files
         if content_type is None:
             return None
-        # elif "text/" not in content_type.lower():
-        #     return None
 
         text_content = ""
         with open(local_path, "rt", encoding="utf-8") as fh:
@@ -333,7 +331,7 @@ class YouTubeConverter(DocumentConverter):
                 return metadata[k]
         return default
 
-    def _findKey(self, json: Any, key: str) -> Union[str, None]:  # TODO: Fix json type
+    def _findKey(self, json: Any, key: str) -> Union[str, None]:  
         if isinstance(json, list):
             for elm in json:
                 ret = self._findKey(elm, key)
@@ -802,7 +800,7 @@ class MarkdownConverter:
 
     def convert(
         self, source: Union[str, requests.Response], **kwargs: Any
-    ) -> DocumentConverterResult:  # TODO: deal with kwargs
+    ) -> DocumentConverterResult:  
         """
         Args:
             - source: can be a string representing a path or url, or a requests.response object
@@ -833,7 +831,7 @@ class MarkdownConverter:
         return self._convert(path, extensions, **kwargs)
 
     # TODO what should stream's type be?
-    def convert_stream(self, stream: Any, **kwargs: Any) -> DocumentConverterResult:  # TODO: deal with kwargs
+    def convert_stream(self, stream: Any, **kwargs: Any) -> DocumentConverterResult: 
         # Prepare a list of extensions to try (in order of priority)
         ext = kwargs.get("file_extension")
         extensions = [ext] if ext is not None else []
@@ -866,7 +864,7 @@ class MarkdownConverter:
 
         return result
 
-    def convert_url(self, url: str, **kwargs: Any) -> DocumentConverterResult:  # TODO: fix kwargs type
+    def convert_url(self, url: str, **kwargs: Any) -> DocumentConverterResult: 
         # Send a HTTP request to the URL
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0"
         response = self._requests_session.get(url, stream=True, headers={"User-Agent": user_agent})
@@ -875,7 +873,7 @@ class MarkdownConverter:
 
     def convert_response(
         self, response: requests.Response, **kwargs: Any
-    ) -> DocumentConverterResult:  # TODO fix kwargs type
+    ) -> DocumentConverterResult:  
         # Prepare a list of extensions to try (in order of priority)
         ext = kwargs.get("file_extension")
         extensions = [ext] if ext is not None else []
@@ -975,7 +973,6 @@ class MarkdownConverter:
         ext = ext.strip()
         if ext == "":
             return
-        # if ext not in extensions:
         if True:
             extensions.append(ext)
 
