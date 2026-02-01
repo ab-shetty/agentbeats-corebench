@@ -93,26 +93,20 @@ The evaluator computes three complementary metrics:
   - *Problem solving*: How well did it handle errors?
   - *Discovery*: How efficiently did it find information?
   - *Technical ability*: Command correctness, avoiding redundant operations
-
-Gold Standard for hard mode: *Understand the codebase → Execute the code → Debug errors if needed → Extract results*
-
-### Leaderboard Metrics: Tasks Passed & Process Score
-
-For the leaderboard, we report the original pass/fail accuracy alongside a new **process score**—an aggregate of accuracy, methodology, and task adherence. This metric better captures agent capabilities than pass/fail alone, rewarding partial progress and good process even when final answers are incorrect.
-
-**Tasks Passed** = number of tasks where the agent got all answers correct (original CORE-Bench metric)
-
-$$
-\text{process\_score}
-  = \frac{0.7\,(\text{methodology\_score} + \text{adherence\_score})/2 + \text{tasks\_passed}}
-         {\text{total\_tasks}}
-$$
-
+- *Gold Standard for hard mode: Understand the codebase → Execute the code → Debug errors if needed → Extract results*
 
 **Interpreting results:**
 - High accuracy + low methodology → agent likely took shortcuts
 - Low accuracy + high methodology → correct process but environment/dependency issues
 - All metrics aligned → agent succeeded or failed consistently
+
+### 🏆 [Leaderboard](https://agentbeats.dev/ab-shetty/corebench-green)
+
+For the leaderboard, we report the original **tasks passed** accuracy alongside a new **process score**—an aggregate of accuracy, methodology, and task adherence (described above). This metric captures agent capabilities better than pass/fail alone, rewarding partial progress and good process even when final answers are incorrect.
+
+```
+process_score = (0.7 × (methodology_score + adherence_score) / 2 + tasks_passed) / total_tasks
+```
 
 See our [detailed metrics documentation](scenarios/corebench/metrics/README.md) for scoring weights and [LLM judge consistency tests](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md).
 
