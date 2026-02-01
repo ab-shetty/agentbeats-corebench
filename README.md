@@ -1,236 +1,205 @@
-# AgentBeats CoreBench
+# AgentBeats x CORE-Bench
 
 **Testing AI Agents' Ability to Reproduce Published Scientific Research**
 
-🔬 **[CORE-Bench](https://github.com/siegelz/core-bench)** ("Computational Reproducibility Agent Benchmark") by [Siegel et al.](https://openreview.net/forum?id=BsMMc4MEGS) tests the ability of AI agents to reproduce the results of scientific publications based on code and data provided by their authors. We "agentified" the original benchmark (in its current form as part of [HAL](https://github.com/princeton-pli/hal-harness)) for the [AgentBeats](https://agentbeats.ai) platform (adding a "green agent" orchestrator), expanded the benchmark with newer research papers, and introduced an alternative success metric that rewards partial progress toward the goal in lieu of the original binary pass/fail metric.
+🔬 **[CORE-Bench](https://github.com/siegelz/core-bench)** ("Computational Reproducibility Agent Benchmark") by [Siegel et al.](https://openreview.net/forum?id=BsMMc4MEGS) tests the ability of AI agents to reproduce the results of scientific publications based on code and data provided by their authors. 
+
+We *agentified* CORE-Bench (as implemented in [HAL](https://github.com/princeton-pli/hal-harness)) for the [AgentBeats](https://agentbeats.ai) platform by:
+- Adding a "green agent" orchestrator
+- Expanding with 27 newer research papers
+- Introducing alternative success metric that rewards partial progress toward the goal in lieu of binary pass/fail
+
+
+## How it works
+
+72 tasks across computer science, social science, and medicine—each testable at three difficulty levels.
+
+| Component           | Role                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| 📦 **Code Capsules** | Pre-packaged research tasks containing code and data from published papers.                   |
+| 🟣 **Purple Agent**  | The agent under test. Reasons about tasks and requests actions to reproduce research results. |
+| 🟢 **Green Agent**   | Orchestrates the test. Executes Purple's requests and measures reproduction success.          |
+| 🔧 **MCP Server**    | Provides the tools Purple uses: file operations, code execution, and more.                    |
+
+### Difficulty Levels
+| Difficulty | Agent Has Access To                                               | Agent Must...                             |
+| ---------- | ----------------------------------------------------------------- | ----------------------------------------- |
+| **Easy**   | Codebase with pre-computed results, run instructions, and scripts | Read and extract answers from results     |
+| **Medium** | Codebase with run instructions and scripts                        | Follow instructions to regenerate results |
+| **Hard**   | Source code only                                                  | Figure out how to run from scratch        |
+
+---
 
 ## Quickstart
+
 1. Clone the repo
 ```bash
-git clone git@github.com:ab-shetty/agentbeats-corebench.git 
+git clone git@github.com:ab-shetty/agentbeats-corebench.git
 cd agentbeats-corebench
 ```
-2. Install dependencies
+2. Install all dependencies
 ```bash
 uv sync
 ```
-3. Set environment variables: `NEBIUS_API_KEY` & `OPENAI_API_KEY` in `.env`
+3. Set environment variables: `NEBIUS_API_KEY` & `OPENAI_API_KEY`
 ```bash
 cp sample.env .env
 ```
-4. (Optional) Configure LLM model in `.env` or `scenario.toml` (see LLM Configuration below)
-   
-5. Run the CoreBench Scenario:
+4. Run the Benchmark:
 ```bash
 uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
 ```
-**Note:** Use `--show-logs` to see agent outputs during the assessment, and `--serve-only` to start agents without running the assessment.
 
-## Custom LLM Configuration
+## Custom Configuration
 
-The purple agent uses **Nebius API** `nebius/openai/gpt-oss-120b` & **OpenAI API** `gpt-5-mini` (for vision/judge) **by default**. You can customize the LLM model used by the purple agent on the Nebius API in two ways:
+**LLM Models:**
+- **Purple & Green Agents**: uses `nebius/openai/gpt-oss-120b`
+  - Change model by setting `COREBENCH_TEXT_MODEL` in `.env`
+- **LLM-as-a-Judge**: uses `gpt-5-mini`
+  - Change model by setting `judge_llm` in `scenario.toml`
+  - *Why gpt-5-mini?* achieved 56% lower variance than alternatives, σ < 0.05 [read about our tests here](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md)
 
-   1. Defining an environment variable in `.env`:
-   ```bash
-   COREBENCH_TEXT_MODEL=meta-llama/Llama-3.3-70B-Instruct
-   ```
-
-   2. Adding a model argument in `scenario.toml`:
-   ```toml
-   [[participants]]
-   cmd = "python scenarios/corebench/corebench_agent.py ... --model meta-llama/Llama-3.3-70B-Instruct"
-   ```
-
-*(Run as usual)*
-
-**Custom LLM Configuration Priority:**
-
-Model selection follows this priority (highest to lowest):
-1. CLI `--model` in `scenario.toml` - best for testing different models quickly
-2. `COREBENCH_TEXT_MODEL` env var - good for persistent defaults
-3. Default - `nebius/openai/gpt-oss-120b`
-
-<details>
-<summary><strong>Advanced: Self-Hosted vLLM</strong></summary>
-
-For users running their own vLLM server locally:
-
-1. Start your vLLM server
-2. Configure `.env`:
-   ```bash
-   COREBENCH_TEXT_API_BASE=http://127.0.0.1:8000/v1
-   COREBENCH_TEXT_MODEL=Qwen/Qwen3-Coder-30B-A3B-Instruct
-   COREBENCH_TEXT_API_KEY=dummy
-   ```
-3. Run as usual:
-   ```bash
-   uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
-   ```
-
-When `COREBENCH_TEXT_API_BASE` is set, the agent routes requests to your local server instead of Nebius.
-
-</details>
-
----
-
-## Difficulty Levels
-
-Select the difficulty level by modifying the `domain` field in `scenario.toml`:
-
+**Benchmark Settings** (`scenario.toml`):
 ```toml
 [config]
-domain = "corebench_easy"  # Options: "corebench_easy", "corebench_medium", "corebench_hard"
+domain = "corebench_hard"           # difficulty: _easy, _medium, or _hard
+num_tasks = 10                      # tasks to run (max 72)
+# task_ids = ["capsule-9670283"]    # run specific tasks
+keep_traces = true                  # save execution traces
+use_cache = true                    # cache capsules locally
+# judge_llm = "gpt-5-mini"          # customize judge model
 ```
-
-| Difficulty | What's Removed                              | Agent Must...                               |
-| ---------- | ------------------------------------------- | ------------------------------------------- |
-| **Easy**   | Nothing                                     | Execute existing code, extract results      |
-| **Medium** | `results/` folder                           | Re-run experiments to regenerate results    |
-| **Hard**   | `results/` + `REPRODUCING.md` + run scripts | Figure out how to run the code from scratch |
-
----
-
-## Leaderboard Panel 
-
-| Task Passed              | Process Score                                           |
-| ------------------------ | ------------------------------------------------------- |
-| Tasks with 100% Accuracy | Aggregate of Methodololgy, Task Adherence, and Accuracy |
-
 
 ---
 
 ## Evaluation Metrics
 
-CoreBench uses three complementary metrics:
+The original CORE-Bench only measured binary pass/fail based on answer accuracy. We add **methodology** and **task adherence** metrics that provide insight into actual progress—how far did the agent get?—and guidance on where it can improve. These metrics have also exposed shortcuts: we found cases where agents retrieved the right answer without genuine reproduction, such as extracting figure labels directly from code.
 
-| Metric                | Type          | Description                                                                                                                                              |
-| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Accuracy**          | Deterministic | Measures correctness of final answers. Numeric answers use 95% prediction intervals to handle ML stochasticity. Split into written vs. vision questions. |
-| **Methodology Score** | Deterministic | Trace-based evaluation of agent process: Did it read documentation? Execute the right scripts? Recover from errors? Domain-specific scoring weights.     |
-| **Task Adherence**    | LLM-as-Judge  | Qualitative assessment (0-1) of how well the agent followed instructions, navigated the codebase, and solved problems efficiently.                       |
+The evaluator computes three complementary metrics:
 
-### Methodology Scoring by Difficulty
+**Accuracy** (Deterministic)
+- Percentage of correct answers, as in the original CORE-Bench
+- Numeric answers use 95% prediction intervals to handle ML stochasticity
 
-| Component            | Easy | Medium | Hard |
-| -------------------- | ---- | ------ | ---- |
-| Doc Reading          | 100% | 25%    | 15%  |
-| Script Reading       | -    | 15%    | 20%  |
-| Execution Coverage   | -    | 35%    | 45%  |
-| Successful Execution | -    | 25%    | 20%  |
+**Methodology** (Deterministic, 0-1)
+- Evaluates good-practice reproduction methods: Did the agent read the README and script files? Did it execute the expected scripts?
+- Points awarded based on how many of these "steps" the agent took
 
-We've done thourough consistency checks on our LLM-as-a-judge, documented [here](scenarios/corebench/metrics/llm_judge_consistency.md).
+**Task Adherence** (LLM-as-Judge, 0-1)
+- Passes tool calls, results, task README, and questions to an LLM judge
+- Scores the agent on:
+  - *Process quality*: Did it execute the correct scripts and extract results?
+  - *Problem solving*: How well did it handle errors?
+  - *Discovery*: How efficiently did it find information?
+  - *Technical ability*: Command correctness, avoiding redundant operations
+
+Gold Standard for hard mode: *Understand the codebase → Execute the code → Debug errors if needed → Extract results*
+
+### Leaderboard Metrics: Tasks Passed & Process Score
+
+For the leaderboard, we report the original pass/fail accuracy alongside a new **process score**—an aggregate of accuracy, methodology, and task adherence. This metric better captures agent capabilities than pass/fail alone, rewarding partial progress and good process even when final answers are incorrect.
+
+**Tasks Passed** = number of tasks where the agent got all answers correct (original CORE-Bench metric)
+
+$$
+\text{process\_score}
+  = \frac{0.7\,(\text{methodology\_score} + \text{adherence\_score})/2 + \text{tasks\_passed}}
+         {\text{total\_tasks}}
+$$
+
+
+**Interpreting results:**
+- High accuracy + low methodology → agent likely took shortcuts
+- Low accuracy + high methodology → correct process but environment/dependency issues
+- All metrics aligned → agent succeeded or failed consistently
+
+See our [detailed metrics documentation](scenarios/corebench/metrics/README.md) for scoring weights and [LLM judge consistency tests](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md).
 
 ---
 
 ## Results & Logs
 
-You will see real-time evaluation metrics in your terminal after the benchmark run completes: 
+After the benchmark completes, you'll see a summary:
 
 ```text
-⭐ CoreBench Benchmark Results ⭐
-Domain: corebench_hard
-Tasks: 1/5 passed (20.0%)
-
-📊 Accuracy Metrics:
-  Accuracy: 20.0%
-  Written: 0.0%, Vision: 20.0%
-
-🔧 Methodology Metrics (Deterministic):
-  Methodology Score: 0.38/1.0
-  Doc Read Rate: 80.0%
-  Execution Attempt Rate: 40.0%
-  Successful Execution Rate: 40.0%
-  Error Recovery Rate: 100.0%
-
-📋 Task Adherence (LLM Judge): 0.54/1.0
-
-⚡ Total Time: 264.1s
-  Cost Efficiency: $0.017900/task (total: $0.0895)
-  Tokens: 475,515 input, 30,284 output
-
-📋 Task Results:
-  capsule-9641396: ✅ (acc=100.0%, process=0.35)
-  capsule-6003668: ❌ (acc=0.0%, process=0.00)
-  capsule-8234136: ❌ (acc=0.0%, process=0.70)
-  capsule-9660931: ❌ (acc=0.0%, process=0.70)
-  capsule-0625246: ❌ (acc=0.0%, process=0.15)
+================================================================================
+🏆 EVALUATION COMPLETE
+================================================================================
+✅ Success Rate: 7/25 (28.0%)
+📊 Mean Accuracy: 32.0%
+📋 Mean Task Adherence: 0.53/1.0
+🔧 Mean Methodology Score: 0.49/1.0
+   - Doc Read Rate: 76.0%
+   - Execution Attempt Rate: 56.0%
+   - Successful Execution Rate: 12.0%
 ```
-Full execution traces are saved to:
+
+Per-task output shows detailed scoring breakdown:
+
+```text
+1️⃣  Computing accuracy...
+   ✓ Accuracy: 1/1 (100.0%)
+
+2️⃣  Extracting methodology metrics...
+   ✓ Methodology Score: 0.35/1.0
+   Score Breakdown:
+     Doc Read:        0.15/0.15  (README.md)
+     Script Read:     0.20/0.20  (code/step_2_plot_top1_top2.py)
+     Script Attempt:  0.00/0.45  (not attempted)
+     Run Success:     0.00/0.20  (✗ no successful run)
+
+3️⃣  Computing task adherence (LLM judge)...
+   ✓ Adherence Score: 0.67/1.0
+
+💭 Judge Reasoning:
+   Core Process (28/50) – Understood the code but did not finish the required script.
+   Problem Solving (19/25) – Strong debugging: identified and fixed multiple issues.
+   Discovery (12/15) – Quickly located README and relevant files.
+   Technical (8/10) – Correct commands, minimal redundancy.
 ```
-logs/traces/corebench_trace_*.jsonl
-```
+
+Full execution traces are saved to: `logs/traces/corebench_trace_<date>_<run_id>.jsonl`
 
 ---
 
-## Testing the MCP Server
 
-To test the MCP server functionality using an interactive, web-based MCP inspector:
-
-1. Navigate to `scenarios/corebench` and run:
-```bash
-uv run mcp dev mcp_server.py
-```
-
-2. Click **Connect** > **Tools** > **List Tools** > Select tool to test
-
-![MCP Inspector](assets/image.png)
-
-3. Alternatively, run the Python test harness (starts MCP server and communicates via JSON-RPC):
-```bash
-uv run python test_mcp_tools_jsonrpc_full.py
-```
-
-## Project Structure
+## Repository Overview
 
 ```
 agentbeats-corebench/
 ├── scenarios/
 │   └── corebench/
-│       ├── scenario.toml          # Scenario config
-│       ├── corebench_agent.py     # Purple agent
-│       ├── corebench_evaluator.py # Green agent
-│       ├── mcp_server.py          # MCP tool server
-│       ├── mdconvert.py           # Markdown conversion utilities
-│       ├── planning_prompts.yaml  # ReAct planning prompts (from smolagents MultiStepAgent)
-│       ├── core_test.json         # Task definitions    
-│       ├── metrics/               # Evaluation metrics       
-│       ├── capsules/              # Downloaded research capsules
-│       ├── workspace/             # Capsule execution sandbox
-│       └── shared_logging.py      
+│       ├── scenario.toml
+│       ├── corebench_agent.py      # Purple agent
+│       ├── corebench_evaluator.py  # Green agent
+│       ├── mcp_server.py           # MCP tools
+│       ├── mdconvert.py            # Markdown conversion utilities
+│       ├── planning_prompts.yaml   # ReAct planning prompts (from smolagents MultiStepAgent)
+│       ├── core_test.json          # Task definitions
+│       ├── metrics/                # Evaluation metrics
+│       ├── capsules/               # Cached research capsules
+│       ├── workspace/              # Purple agent execution sandbox
+│       │   ├── code/
+│       │   ├── data/
+│       │   └── environment/
+│       └── shared_logging.py
 ├── src/agentbeats/
-│   ├── run_scenario.py            # Main CLI entrypoint (agentbeats-run)
-│   ├── client.py                  # A2A client implementation
-│   ├── green_executor.py          # Green agent execution logic
-│   ├── tool_provider.py           # MCP tool integration
-│   └── models.py                  # Shared data models
+│   ├── run_scenario.py             # Main CLI entrypoint (agentbeats-run)
+│   ├── client.py                   # A2A client implementation
+│   ├── green_executor.py           # Green agent execution logic
+│   ├── tool_provider.py            # MCP tool integration
+│   └── models.py                   # Shared data models
 ├── logs/
-│   └── traces/                    
-├── sample.env                     # Template for environment variables
-└── pyproject.toml                 # Python dependencies (uv)
+│   └── traces/
+├── sample.env
+└── pyproject.toml                  # Python dependencies
 ```
 
-### Key Components
-
-| Component         | Role                                                                                                                          |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **Purple Agent**  | LLM-powered reasoning agent. Receives tasks, thinks, and emits structured tool intents (JSON). Never executes tools directly. |
-| **Green Agent**   | Orchestrator & evaluator. Sends tasks to purple, executes tool calls via MCP, compares results to ground truth.               |
-| **MCP Server**    | Provides tools (file read/write, bash execution, etc.) that the green agent invokes on behalf of purple.                      |
-| **scenario.toml** | Defines agent endpoints, commands, and config (domain, task count, MCP settings).                                             |
-
 ---
 
-## Troubleshooting
+## Architecture Diagram
 
-| Issue                 | Solution                                                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Command timed out** | Increase `timeout` in `mcp_server.py` (default 900s/15min). Heavy ML on ARM64 emulation may need more. |
-| **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow.         |
-| **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.             |
-
----
-
-# Architectural Diagram
 ```mermaid
 sequenceDiagram
     participant Green as Green Agent
@@ -263,5 +232,53 @@ sequenceDiagram
 
     Note over Green: All tasks completed
 ```
+
+---
+
+## Troubleshooting
+
+| Issue                 | Solution                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| **Command timed out** | Increase `timeout` in `mcp_server.py` and `corebench_agent.py`.                                |
+| **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow. |
+| **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.     |
+
+---
+
+## Testing the MCP Server
+
+To test the MCP server functionality using an interactive, web-based MCP inspector:
+
+1. Navigate to `scenarios/corebench` and run:
+```bash
+uv run mcp dev mcp_server.py
+```
+
+2. Click **Connect** > **Tools** > **List Tools** > Select tool to test
+
+![MCP Inspector](assets/image.png)
+
+3. Alternatively, run the Python test harness (starts MCP server and communicates via JSON-RPC):
+```bash
+uv run python test_mcp_tools_jsonrpc_full.py
+```
+
+---
+
+<details>
+<summary><strong>Advanced: Self-Hosted LLM</strong></summary>
+
+For users running their own vLLM/Ollama server locally:
+
+1. Start your server
+2. Configure `.env`:
+   ```bash
+   COREBENCH_TEXT_API_BASE=http://127.0.0.1:8000/v1
+   COREBENCH_TEXT_MODEL=ollama/your-model-name
+   COREBENCH_TEXT_API_KEY=dummy
+   ```
+3. Run as usual. 
+
+</details>
 
 (See the [AgentBeats tutorial](https://github.com/RDI-Foundation/agentbeats-tutorial) for an explanation of concepts such as green and purple agents, and technical documentation)
