@@ -1607,7 +1607,7 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
 
         if methodology_metrics.expected_scripts:
             expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts}
-            logger.info(f"   Expected: {list(expected_basenames)}")
+            logger.debug(f"   Expected: {list(expected_basenames)}")
 
             # What matched vs what didn't
             matched_success = expected_basenames & executed_basenames
@@ -1616,27 +1616,27 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             other_failed = failed_basenames - expected_basenames
 
             if matched_success:
-                logger.info(f"   Executed: {list(matched_success)}")
+                logger.debug(f"   Executed: {list(matched_success)}")
             elif matched_failed:
-                logger.info(f"   Executed: (none - expected script failed)")
+                logger.debug(f"   Executed: (none - expected script failed)")
             else:
-                logger.info(f"   Executed: (none of expected)")
+                logger.debug(f"   Executed: (none of expected)")
 
             # Show what else ran
             if other_success:
-                logger.info(f"   Also ran: {list(other_success)} (succeeded, not expected)")
+                logger.debug(f"   Also ran: {list(other_success)} (succeeded, not expected)")
             if matched_failed:
-                logger.info(f"   Failed: {list(matched_failed)} (expected script)")
+                logger.debug(f"   Failed: {list(matched_failed)} (expected script)")
             if other_failed:
-                logger.info(f"   Failed: {list(other_failed)} (not expected)")
+                logger.debug(f"   Failed: {list(other_failed)} (not expected)")
         else:
             # Generic task - no specific scripts in prompt
             if executed_list:
-                logger.info(f"   Executed: {list(executed_basenames)} (generic task)")
+                logger.debug(f"   Executed: {list(executed_basenames)} (generic task)")
             elif failed_list:
-                logger.info(f"   Attempted: {list(failed_basenames)} (failed - generic task)")
+                logger.debug(f"   Attempted: {list(failed_basenames)} (failed - generic task)")
             elif methodology_metrics.attempted_execution:
-                logger.info(f"   Executed: (attempted but failed - generic task)")
+                logger.debug(f"   Executed: (attempted but failed - generic task)")
         logger.info(f"   ✓ Methodology Score: {methodology_metrics.methodology_score:.2f}/1.0")
         # Show score breakdown with max possible for each component
         breakdown = methodology_metrics.score_breakdown
@@ -1649,14 +1649,14 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
             else:  # easy
                 max_doc, max_script, max_expected, max_success, max_recovery = 1.0, 0.0, 0.0, 0.0, 0.0
 
-            logger.info(f"   Score Breakdown:")
+            logger.debug(f"   Score Breakdown:")
             # Doc read
             docs_list = ', '.join(methodology_metrics.docs_read) if methodology_metrics.docs_read else 'none read'
-            logger.info(f"     Doc Read:        {breakdown.doc_read_score:.2f}/{max_doc:.2f}  ({docs_list})")
+            logger.debug(f"     Doc Read:        {breakdown.doc_read_score:.2f}/{max_doc:.2f}  ({docs_list})")
             # Script read (only for hard mode)
             if breakdown.domain == "corebench_hard":
                 scripts_list = ', '.join(methodology_metrics.scripts_read) if methodology_metrics.scripts_read else 'none read'
-                logger.info(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
+                logger.debug(f"     Script Read:     {breakdown.script_read_score:.2f}/{max_script:.2f}  ({scripts_list})")
             # Script identification - show which expected scripts were actually run
             expected_basenames = {os.path.basename(s) for s in methodology_metrics.expected_scripts} if methodology_metrics.expected_scripts else set()
             executed_basenames = {os.path.basename(s) for s in (methodology_metrics.executed_scripts or [])}
@@ -1697,9 +1697,9 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                 else:
                     coverage_parts.append("not attempted")
 
-            logger.info(f"     Script Attempt:  {breakdown.execution_coverage_score:.2f}/{max_expected:.2f}  (expected: {expected_str})")
+            logger.debug(f"     Script Attempt:  {breakdown.execution_coverage_score:.2f}/{max_expected:.2f}  (expected: {expected_str})")
             for part in coverage_parts:
-                logger.info(f"                                     ({part})")
+                logger.debug(f"                                     ({part})")
             # Execution success bonus - any script completing successfully
             if methodology_metrics.successful_execution:
                 executed_list = methodology_metrics.executed_scripts or []
@@ -1718,23 +1718,23 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
                     success_detail = "✓ code executed successfully"
             else:
                 success_detail = "✗ no successful run"
-            logger.info(f"     Run Success:     {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
+            logger.debug(f"     Run Success:     {breakdown.successful_execution_score:.2f}/{max_success:.2f}  ({success_detail})")
             # Error info
             err = methodology_metrics.error_recovery
             if err.total_errors > 0:
                 error_types_str = ', '.join(f"{k}:{v}" for k, v in err.error_types.items()) if err.error_types else 'unclassified'
-                logger.info(f"     Error Info:      {err.errors_recovered}/{err.total_errors} recovered - {error_types_str}")
+                logger.debug(f"     Error Info:      {err.errors_recovered}/{err.total_errors} recovered - {error_types_str}")
             else:
-                logger.info(f"     Error Info:      no errors")
+                logger.debug(f"     Error Info:      no errors")
             # Penalties
             if breakdown.penalty != 0:
-                logger.info(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")
+                logger.debug(f"     Penalty:        {breakdown.penalty:.2f}       (no deps install on failure)")
             logger.info(f"     ─────────────────────")
         # Show additional details
         if methodology_metrics.stdout_captured:
-            logger.info(f"   - Stdout Captured: {methodology_metrics.stdout_total_bytes:,} bytes")
+            logger.debug(f"   - Stdout Captured: {methodology_metrics.stdout_total_bytes:,} bytes")
         if methodology_metrics.violations:
-            logger.info(f"   ⚠️ Violations: {', '.join(methodology_metrics.violations)}")
+            logger.debug(f"   ⚠️ Violations: {', '.join(methodology_metrics.violations)}")
 
         # Add methodology metrics to trace
         if trace:
@@ -1792,10 +1792,10 @@ MCP Tools: {'Enabled' if use_mcp else 'Disabled'}"""
         )
         logger.info(f"   ✓ Adherence Score: {adherence_metrics.score:.2f}/1.0")
         if adherence_metrics.reasoning:
-            logger.info(f"\n   💭 Judge Reasoning (Task Adherence):")
+            logger.debug(f"\n   💭 Judge Reasoning (Task Adherence):")
             for line in adherence_metrics.reasoning.split('\n'):
                 if line.strip():
-                    logger.info(f"      {line}")
+                    logger.debug(f"      {line}")
             logger.info("")
         
         # Build complete evaluation result
