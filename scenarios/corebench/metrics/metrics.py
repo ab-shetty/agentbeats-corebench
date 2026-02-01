@@ -659,7 +659,7 @@ async def evaluate_task_adherence(
         has_answer="Yes" if submitted else "No",
     )
     
-    # API configuration - match mcp_server.py pattern for OpenAI models
+
     openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
 
     model_name = judge_model
@@ -964,8 +964,9 @@ def _classify_error(summary: str) -> str:
     summary_lower = summary.lower()
 
     # Import/Module errors
+    # Treat missing modules as dependency/install issues (aligns with TensorFlow-style missing lib errors)
     if "modulenotfounderror" in summary_lower or "no module named" in summary_lower:
-        return "import_error"
+        return "install_error"
 
     # File system errors
     if "filenotfounderror" in summary_lower or "no such file" in summary_lower:
