@@ -31,6 +31,7 @@ MODEL_PRICES_DICT = {
                 "nebius/nvidia/Llama-3_1-Nemotron-Ultra-253B-v1": {"prompt_tokens": 0.60/1e6, "completion_tokens": 1.80/1e6},
                 "nebius/deepseek/DeepSeek-V3-0324": {"prompt_tokens": 0.50/1e6, "completion_tokens": 1.50/1e6},  # Base flavor
                 "nebius/deepseek/DeepSeek-V3-0324-fast": {"prompt_tokens": 0.75/1e6, "completion_tokens": 2.25/1e6},  # Fast flavor
+                "nebius/deepseek-ai/DeepSeek-V3.2": {"prompt_tokens": 0.30/1e6, "completion_tokens": 0.45/1e6}, 
                 "nebius/meta/Llama-3.3-70B-Instruct": {"prompt_tokens": 0.13/1e6, "completion_tokens": 0.40/1e6},  # Base flavor
                 "nebius/meta/Llama-3.3-70B-Instruct-fast": {"prompt_tokens": 0.25/1e6, "completion_tokens": 0.75/1e6},  # Fast flavor
                 "nebius/google/Gemma-3-27b-it": {"prompt_tokens": 0.10/1e6, "completion_tokens": 0.30/1e6},  # Base flavor
@@ -42,5 +43,5 @@ MODEL_PRICES_DICT = {
                 "nebius/google/Gemma-2-2b-it": {"prompt_tokens": 0.02/1e6, "completion_tokens": 0.06/1e6},
                 "nebius/google/Gemma-2-9b-it": {"prompt_tokens": 0.03/1e6, "completion_tokens": 0.09/1e6},
                 "nebius/meta/Meta-Llama-Guard-3-8B": {"prompt_tokens": 0.02/1e6, "completion_tokens": 0.06/1e6},
-                "nebius/nvidia/Nemotron-Nano-V2-12b": {"prompt_tokens": 0.07/1e6, "completion_tokens": 0.20/1e6},
+                "nebius/nvidia/Nemotron-Nano-V2-12b": {"prompt_tokens": 0.07/1e6, "completion_tokens": 0.20/1e6},  
 }
