@@ -18,8 +18,6 @@ jobs:
           # Update this to build your own agent images.
           - name: corebench-agent-gemma
             dockerfile: scenarios/corebench/Dockerfile.corebench-agent
-          - name: corebench-evaluator-gemma
-            dockerfile: scenarios/corebench/Dockerfile.corebench-evaluator
 
     # These permissions are required for the workflow to:
     # - Read repository contents (checkout code)
