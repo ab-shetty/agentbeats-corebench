@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 # Configuration in .env:
 # Only API_KEYS set -> DEFAULT_MODEL
 # Also COREBENCH_** set → self-hosted, prepends "openai/"
-DEFAULT_MODEL = "nebius/google/gemma-3-27b-it"
+DEFAULT_MODEL = "nebius/google/Gemma-3-27b-it"
 TEXT_API_BASE = (os.getenv("COREBENCH_TEXT_API_BASE") or "").strip()
 TEXT_API_KEY = (os.getenv("COREBENCH_TEXT_API_KEY") or "").strip()
 
