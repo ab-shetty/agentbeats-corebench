@@ -4,7 +4,7 @@ name: Publish Agents
 on:
   push:
     branches:
-      - main
+      - gemma
     tags:
       - 'v*'  # Trigger on version tags like v1.0.0, v1.1.0
 
@@ -16,9 +16,9 @@ jobs:
       matrix:
         include:
           # Update this to build your own agent images.
-          - name: corebench-agent
+          - name: corebench-agent-gemma
             dockerfile: scenarios/corebench/Dockerfile.corebench-agent
-          - name: corebench-evaluator
+          - name: corebench-evaluator-gemma
             dockerfile: scenarios/corebench/Dockerfile.corebench-evaluator
 
     # These permissions are required for the workflow to:
@@ -54,6 +54,8 @@ jobs:
             type=semver,pattern={{major}}
             # For main branch, create tag 'latest'
             type=raw,value=latest,enable={{is_default_branch}}
+            # For branch pushes, create tag with branch name
+            type=ref,event=branch
             # For PRs, create tag 'pr-123'
             type=ref,event=pr
 
@@ -70,8 +72,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Explicitly build for linux/amd64 (GitHub Actions default)
           platforms: linux/amd64
-          build-args: |
-            GPG_PASSPHRASE=${{ secrets.GPG_PASSPHRASE }}
 
       - name: Output image digest
         if: github.event_name != 'pull_request'
