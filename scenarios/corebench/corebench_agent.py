@@ -268,7 +268,7 @@ class CoreBenchPurpleAgent(AgentExecutor):
             }
         else:
             # Pass model directly to litellm (provider prefix already in model name)
-            return {"model": TEXT_MODEL, "messages": messages, "timeout": 60}
+            return {"model": TEXT_MODEL.lower(), "messages": messages, "timeout": 60}
 
     def _track_tokens(self, context_id: str, response) -> None:
         """Track tokens from a completion response."""
