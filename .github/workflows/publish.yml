@@ -4,7 +4,7 @@ name: Publish Agents
 on:
   push:
     branches:
-      - main
+      - oss-20b
     tags:
       - 'v*'  # Trigger on version tags like v1.0.0, v1.1.0
 
@@ -16,10 +16,8 @@ jobs:
       matrix:
         include:
           # Update this to build your own agent images.
-          - name: corebench-agent
+          - name: corebench-agent-20b
             dockerfile: scenarios/corebench/Dockerfile.corebench-agent
-          - name: corebench-evaluator
-            dockerfile: scenarios/corebench/Dockerfile.corebench-evaluator
 
     # These permissions are required for the workflow to:
     # - Read repository contents (checkout code)
