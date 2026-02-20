@@ -889,8 +889,7 @@ class CoreBenchEvaluator(GreenAgent):
         keep_traces = req.config.get("keep_traces", False)  # Whether to keep trace files after run
 
         # LLM-as-judge model
-        default_judge_model = os.getenv("COREBENCH_TEXT_MODEL") or "gpt-5-mini"
-        judge_llm = req.config.get("judge_llm", default_judge_model) # if override in scenario.toml exists
+        judge_llm = os.getenv("COREBENCH_JUDGE_MODEL") or "openai/gpt-5-mini"
 
         logger.info(f"=" * 80)
         logger.info(f"🚀 STARTING COREBENCH EVALUATION | Run ID: {run_id}")
