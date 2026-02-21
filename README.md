@@ -180,9 +180,10 @@ agentbeats-corebench/
 │       ├── mdconvert.py            # Markdown conversion
 │       ├── planning_prompts.yaml   # ReAct planning prompts (from smolagents MultiStepAgent)
 │       ├── core_test.json.gpg      # Encrypted task definitions
+│       ├── capsule_extension.json.gpg 
 │       ├── metrics/                
 │       ├── capsules/               # Cached research capsules
-│       ├── workspace/              # Purple agent execution sandbox
+│       └── workspace/              # Purple agent execution sandbox
 ├── src/agentbeats/
 │   ├── run_scenario.py             # CLI entrypoint (agentbeats-run)
 │   ├── client.py                   # A2A client
@@ -195,7 +196,7 @@ agentbeats-corebench/
 ```
 
 ### 🔒 Encrypted Test Set
-The task definitions (`core_test.json.gpg`) are GPG-encrypted to prevent leakage of ground truth data. If you're submitting to the leaderboard, see the [leaderboard repository](https://github.com/ab-shetty/agentbeats-corebench-leaderboard). Agents run against the tasks without needing manual decryption.
+The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. The Docker build decrypts automatically. For local runs, the evaluator will provide decryption instructions if needed.
 
 ---
 
