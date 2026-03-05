@@ -114,7 +114,7 @@ The evaluator computes three complementary metrics:
 For the leaderboard, we report the original **tasks passed** accuracy alongside a new **process score**—an aggregate of accuracy, methodology, and task adherence (described above). This metric captures agent capabilities better than pass/fail alone, rewarding partial progress and good process even when final answers are incorrect.
 
 ```
-process_score = (0.7 × (methodology_score + adherence_score) / 2 + tasks_passed) / total_tasks
+process_score = (0.7 × (methodology_score + adherence_score) / 2 + tasks_passed) / total_tasks × 100
 ```
 
 See our [detailed metrics documentation](scenarios/corebench/metrics/README.md) for scoring weights and [LLM judge consistency tests](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md).
@@ -196,7 +196,7 @@ agentbeats-corebench/
 ```
 
 ### 🔒 Encrypted Test Set
-The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. The Docker build decrypts automatically. For local runs, the evaluator will provide decryption instructions if needed.
+The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
 
 ---
 
