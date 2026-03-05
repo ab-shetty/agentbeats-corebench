@@ -204,36 +204,37 @@ The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are
 
 ```mermaid
 sequenceDiagram
-    participant Green as Green Agent
-    participant Purple as Purple Agent
-    participant MCP as MCP Server
+    participant MCP as 🔧 MCP Server
+    participant Green as 🟢 Green Agent
+    participant Purple as 🟣 Purple Agent
 
-    Note over Green: 1. INITIALIZATION<br/>Load tasks.json<br/>Start MCP server
+    Note over Green: Load research tasks
 
     loop For each task
-        Note over Green: 2. TASK SETUP<br/>git clone repo → /code
+        Note over Green: Clone research capsule into sandbox
+        Green->>MCP: Start MCP Server
 
-        Green->>Purple: 3. Send task via A2A<br/>{task_id, description,<br/>mcp_server_url, tools}
+        Green->>Purple: Send task + available tools
 
-        Note over Purple: 4. WORK ON TASK
-        Purple->>MCP: read_file("/code/README.md")
-        MCP-->>Purple: file contents
-        Purple->>MCP: execute_bash("pip install...")
-        MCP-->>Purple: stdout/stderr
-        Purple->>MCP: execute_bash("python run.py")
-        MCP-->>Purple: stdout output.csv
-        Purple->>MCP: read_file("/results/output.csv")
-        MCP-->>Purple: results data
+        rect rgba(128, 128, 128, 0.1)
+            Note over MCP,Purple: Repeat until task is complete
+            Purple-->>Green: Send tool request (ex: execute_bash)
+            Green->>MCP: Execute tool request
+            MCP-->>Green: Receive tool result
+            Green->>Purple: Return tool result (ex: stdout)
+        end
 
-        Purple->>Green: 5. Send completion via A2A<br/>{final_answer}
+        Purple->>Green: Submit final answer
 
-        Note over Green: 6. EVALUATE RESULTS<br/>Read final_answer<br/>Compare with ground truth<br/>Calculate metrics
-
-        Note over Green: 7. CLEANUP & NEXT<br/>Delete /code <br/>Reset MCP state (if needed)<br/>Load next task
+        Note over Green: Evaluate task accuracy,<br/> methodology & adherence
+        Green->>MCP: Terminate MCP Server
+        Note over Green: Clean up sandbox
     end
 
-    Note over Green: All tasks completed
+    Note over Green: All tasks completed<br/>Aggregate and compute final score
 ```
+
+The purple agent never communicates directly with the MCP server. Green acts as the intermediary, receiving tool requests from Purple via A2A and executing them against the MCP server.
 
 ---
 
@@ -246,21 +247,5 @@ sequenceDiagram
 | **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.     |
 
 ---
-
-<details>
-<summary><strong>Self-Hosted LLM</strong></summary>
-
-For users running their own vLLM/Ollama server locally:
-
-1. Start your server
-2. Configure `.env`:
-   ```bash
-   COREBENCH_TEXT_API_BASE=http://127.0.0.1:8000/v1
-   COREBENCH_TEXT_MODEL=ollama/your-model-name
-   COREBENCH_TEXT_API_KEY=dummy
-   ```
-3. Run as usual. 
-
-</details>
 
 (See the [AgentBeats tutorial](https://github.com/RDI-Foundation/agentbeats-tutorial) for an explanation of concepts such as green and purple agents, and technical documentation)
