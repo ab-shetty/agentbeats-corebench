@@ -142,30 +142,63 @@ Per-task output shows detailed scoring breakdown:
 
 ```text
 1️⃣  Computing accuracy...
-   ✓ Accuracy: 1/1 (100.0%)
+    ✓ Accuracy: 0/1 (0%)
 
 2️⃣  Extracting methodology metrics...
-   ✓ Methodology Score: 0.35/1.0
-   Score Breakdown:
-     Doc Read:        0.15/0.15  (README.md)
-     Script Read:     0.20/0.20  (code/step_2_plot_top1_top2.py)
-     Script Attempt:  0.00/0.45  (not attempted)
-     Run Success:     0.00/0.20  (✗ no successful run)
+    ✓ Methodology Score: 0.80/1.0
+      Doc Read:        0.15/0.15  (README.md)
+      Script Read:     0.20/0.20  (multiclass_state_analysis_testing.py)
+      Script Attempt:  0.45/0.45  (multiclass_state_analysis_testing.py)
+      Run Success:     0.00/0.20  (✗ no successful run)
 
 3️⃣  Computing task adherence (LLM judge)...
-   ✓ Adherence Score: 0.67/1.0
-
-💭 Judge Reasoning:
-   Core Process (28/50) – Understood the code but did not finish the required script.
-   Problem Solving (19/25) – Strong debugging: identified and fixed multiple issues.
-   Discovery (12/15) – Quickly located README and relevant files.
-   Technical (8/10) – Correct commands, minimal redundancy.
+    ✓ Adherence Score: 0.78/1.0
+    💭 Judge Reasoning:
+      - Strengths: Located README and ran the correct script on first attempt.
+      - Weaknesses: Failed to resolve dependency errors, did not try alternatives.
 ```
 
-Full execution traces are saved to: `logs/traces/corebench_trace_<date>_<run_id>.jsonl`
+Full execution traces are saved as JSONL files to `logs/traces/<date>/<run_id>/` for debugging and observability.
 
 ---
 
+## Architecture Diagram
+
+```mermaid
+sequenceDiagram
+    participant MCP as 🔧 MCP Server
+    participant Green as 🟢 Green Agent
+    participant Purple as 🟣 Purple Agent
+
+    Note over Green: Load research tasks
+
+    loop For each task
+        Note over Green: Clone research capsule into sandbox
+        Green->>MCP: Start MCP Server
+
+        Green->>Purple: Send task + available tools
+
+        rect rgba(128, 128, 128, 0.1)
+            Note over MCP,Purple: Repeat until task is complete
+            Purple-->>Green: Send tool request (ex: execute_bash)
+            Green->>MCP: Execute tool request
+            MCP-->>Green: Receive tool result
+            Green->>Purple: Return tool result (ex: stdout)
+        end
+
+        Purple->>Green: Submit final answer
+
+        Note over Green: Evaluate task accuracy,<br/> methodology & adherence
+        Green->>MCP: Terminate MCP Server
+        Note over Green: Clean up sandbox
+    end
+
+    Note over Green: All tasks completed<br/>Aggregate and compute final score
+```
+
+The purple agent never communicates directly with the MCP server. Green acts as the intermediary, receiving tool requests from Purple via A2A and executing them against the MCP server.
+
+---
 
 ## Repository Overview
 
@@ -195,46 +228,6 @@ agentbeats-corebench/
 └── pyproject.toml                  
 ```
 
-### 🔒 Encrypted Test Set
-The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
-
----
-
-## Architecture Diagram
-
-```mermaid
-sequenceDiagram
-    participant Green as Green Agent
-    participant Purple as Purple Agent
-    participant MCP as MCP Server
-
-    Note over Green: 1. INITIALIZATION<br/>Load tasks.json<br/>Start MCP server
-
-    loop For each task
-        Note over Green: 2. TASK SETUP<br/>git clone repo → /code
-
-        Green->>Purple: 3. Send task via A2A<br/>{task_id, description,<br/>mcp_server_url, tools}
-
-        Note over Purple: 4. WORK ON TASK
-        Purple->>MCP: read_file("/code/README.md")
-        MCP-->>Purple: file contents
-        Purple->>MCP: execute_bash("pip install...")
-        MCP-->>Purple: stdout/stderr
-        Purple->>MCP: execute_bash("python run.py")
-        MCP-->>Purple: stdout output.csv
-        Purple->>MCP: read_file("/results/output.csv")
-        MCP-->>Purple: results data
-
-        Purple->>Green: 5. Send completion via A2A<br/>{final_answer}
-
-        Note over Green: 6. EVALUATE RESULTS<br/>Read final_answer<br/>Compare with ground truth<br/>Calculate metrics
-
-        Note over Green: 7. CLEANUP & NEXT<br/>Delete /code <br/>Reset MCP state (if needed)<br/>Load next task
-    end
-
-    Note over Green: All tasks completed
-```
-
 ---
 
 ## Troubleshooting
@@ -245,22 +238,9 @@ sequenceDiagram
 | **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow. |
 | **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.     |
 
+### 🔒 Encrypted Test Set
+The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
+
 ---
-
-<details>
-<summary><strong>Self-Hosted LLM</strong></summary>
-
-For users running their own vLLM/Ollama server locally:
-
-1. Start your server
-2. Configure `.env`:
-   ```bash
-   COREBENCH_TEXT_API_BASE=http://127.0.0.1:8000/v1
-   COREBENCH_TEXT_MODEL=ollama/your-model-name
-   COREBENCH_TEXT_API_KEY=dummy
-   ```
-3. Run as usual. 
-
-</details>
 
 (See the [AgentBeats tutorial](https://github.com/RDI-Foundation/agentbeats-tutorial) for an explanation of concepts such as green and purple agents, and technical documentation)
