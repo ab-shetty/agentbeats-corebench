@@ -1,12 +1,10 @@
 [green_agent]
 endpoint = "http://127.0.0.1:9009"
 cmd = "python scenarios/corebench/corebench_evaluator.py --host 127.0.0.1 --port 9009"
-judge_llm = "gpt-5-mini"
 
 [[participants]]
 role = "agent"
 endpoint = "http://127.0.0.1:9019"
-# Add --model to override default LLM (can also be done in env file). 
 cmd = "python scenarios/corebench/corebench_agent.py --host 127.0.0.1 --port 9019"
 
 [config]

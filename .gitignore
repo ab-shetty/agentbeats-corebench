@@ -19,3 +19,5 @@ scenarios/corebench/test_mcp_tools.py
 logs/
 scenarios/corebench/workspace/
 /.vscode
+scenarios/corebench/core_test.json
+scenarios/corebench/capsule_extension.json

@@ -660,13 +660,9 @@ async def evaluate_task_adherence(
     )
     
 
-    openai_api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
-
     model_name = judge_model
     completion_kwargs = {
         "model": model_name,
-        "api_base": "https://api.openai.com/v1",
-        "api_key": openai_api_key,
     }
     logger.debug(f"Task adherence judge using model={model_name}")
     

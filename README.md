@@ -16,7 +16,7 @@ We *agentified* CORE-Bench (as implemented in [HAL](https://github.com/princeton
 
 | Component           | Role                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------- |
-| 📦 **Code Capsules** | Pre-packaged research tasks containing code and data from published papers.                   |
+| 📦 **Code Capsules** | Research tasks containing the original paper's code, data, and dependencies.                  |
 | 🟣 **Purple Agent**  | The agent under test. Reasons about tasks and requests actions to reproduce research results. |
 | 🟢 **Green Agent**   | Orchestrates the test. Executes Purple's requests and measures reproduction success.          |
 | 🔧 **MCP Server**    | Provides the tools Purple uses: file operations, code execution, and more.                    |
@@ -27,6 +27,8 @@ We *agentified* CORE-Bench (as implemented in [HAL](https://github.com/princeton
 | **Easy**   | Codebase with pre-computed results, run instructions, and scripts | Read and extract answers from results     |
 | **Medium** | Codebase with run instructions and scripts                        | Follow instructions to regenerate results |
 | **Hard**   | Source code only                                                  | Figure out how to run from scratch        |
+
+We focus on **Hard**, the most realistic and challenging level, where agents face exactly what a researcher faces when trying to reproduce a paper.
 
 ---
 
@@ -52,14 +54,22 @@ uv run agentbeats-run scenarios/corebench/scenario.toml --show-logs
 
 ## Custom Configuration
 
-**LLM Models:**
-- **Purple & Green Agents**: uses `nebius/openai/gpt-oss-120b`
-  - Change model by setting `COREBENCH_TEXT_MODEL` in `.env`
-- **LLM-as-a-Judge**: uses `gpt-5-mini`
-  - Change model by setting `judge_llm` in `scenario.toml`
-  - *Why gpt-5-mini?* achieved 56% lower variance than alternatives, σ < 0.05 [read about our tests here](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md)
+### LLM Models
 
-**Benchmark Settings** (`scenario.toml`):
+Configure models in `.env` using the format `provider/model-name`. litellm automatically reads the right API key based on the provider prefix. For example, `gemini/` uses `GOOGLE_API_KEY`.
+
+```bash
+COREBENCH_TEXT_MODEL=gemini/gemini-2.0-flash   # Purple agent (default: nebius/openai/gpt-oss-120b)
+COREBENCH_JUDGE_MODEL=openai/gpt-5-mini        # LLM-as-judge (default: openai/gpt-5-mini)
+GOOGLE_API_KEY=your-api-key
+OPENAI_API_KEY=your-openai-key                 # required for vision tool
+```
+
+We recommend `gpt-5-mini` for judging. It achieved 56% lower variance than alternatives ([read about our tests here](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md))
+
+### Benchmark Settings
+
+Configure in `scenario.toml`:
 ```toml
 [config]
 domain = "corebench_hard"           # difficulty: _easy, _medium, or _hard
@@ -67,7 +77,6 @@ num_tasks = 10                      # tasks to run (max 72)
 # task_ids = ["capsule-9670283"]    # run specific tasks
 keep_traces = true                  # save execution traces
 use_cache = true                    # cache capsules locally
-# judge_llm = "gpt-5-mini"          # customize judge model
 ```
 
 ---
@@ -105,7 +114,7 @@ The evaluator computes three complementary metrics:
 For the leaderboard, we report the original **tasks passed** accuracy alongside a new **process score**—an aggregate of accuracy, methodology, and task adherence (described above). This metric captures agent capabilities better than pass/fail alone, rewarding partial progress and good process even when final answers are incorrect.
 
 ```
-process_score = (0.7 × (methodology_score + adherence_score) / 2 + tasks_passed) / total_tasks
+process_score = (0.7 × (methodology_score + adherence_score) / 2 + tasks_passed) / total_tasks × 100
 ```
 
 See our [detailed metrics documentation](scenarios/corebench/metrics/README.md) for scoring weights and [LLM judge consistency tests](scenarios/corebench/metrics/internal/LLM_JUDGE_CONSISTENCY.md).
@@ -167,28 +176,27 @@ agentbeats-corebench/
 │       ├── scenario.toml
 │       ├── corebench_agent.py      # Purple agent
 │       ├── corebench_evaluator.py  # Green agent
-│       ├── mcp_server.py           # MCP tools
-│       ├── mdconvert.py            # Markdown conversion utilities
+│       ├── mcp_server.py           
+│       ├── mdconvert.py            # Markdown conversion
 │       ├── planning_prompts.yaml   # ReAct planning prompts (from smolagents MultiStepAgent)
-│       ├── core_test.json          # Task definitions
-│       ├── metrics/                # Evaluation metrics
+│       ├── core_test.json.gpg      # Encrypted task definitions
+│       ├── capsule_extension.json.gpg 
+│       ├── metrics/                
 │       ├── capsules/               # Cached research capsules
-│       ├── workspace/              # Purple agent execution sandbox
-│       │   ├── code/
-│       │   ├── data/
-│       │   └── environment/
-│       └── shared_logging.py
+│       └── workspace/              # Purple agent execution sandbox
 ├── src/agentbeats/
-│   ├── run_scenario.py             # Main CLI entrypoint (agentbeats-run)
-│   ├── client.py                   # A2A client implementation
-│   ├── green_executor.py           # Green agent execution logic
+│   ├── run_scenario.py             # CLI entrypoint (agentbeats-run)
+│   ├── client.py                   # A2A client
+│   ├── green_executor.py           
 │   ├── tool_provider.py            # MCP tool integration
-│   └── models.py                   # Shared data models
-├── logs/
-│   └── traces/
+│   └── models.py                   
+├── logs/traces/
 ├── sample.env
-└── pyproject.toml                  # Python dependencies
+└── pyproject.toml                  
 ```
+
+### 🔒 Encrypted Test Set
+The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
 
 ---
 
@@ -239,28 +247,8 @@ sequenceDiagram
 
 ---
 
-## Testing the MCP Server
-
-To test the MCP server functionality using an interactive, web-based MCP inspector:
-
-1. Navigate to `scenarios/corebench` and run:
-```bash
-uv run mcp dev mcp_server.py
-```
-
-2. Click **Connect** > **Tools** > **List Tools** > Select tool to test
-
-![MCP Inspector](assets/image.png)
-
-3. Alternatively, run the Python test harness (starts MCP server and communicates via JSON-RPC):
-```bash
-uv run python test_mcp_tools_jsonrpc_full.py
-```
-
----
-
 <details>
-<summary><strong>Advanced: Self-Hosted LLM</strong></summary>
+<summary><strong>Self-Hosted LLM</strong></summary>
 
 For users running their own vLLM/Ollama server locally:
 
