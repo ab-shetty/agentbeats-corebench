@@ -142,61 +142,23 @@ Per-task output shows detailed scoring breakdown:
 
 ```text
 1️⃣  Computing accuracy...
-   ✓ Accuracy: 1/1 (100.0%)
+   ✓ Accuracy: 0/1 (0%)
 
 2️⃣  Extracting methodology metrics...
-   ✓ Methodology Score: 0.35/1.0
-   Score Breakdown:
-     Doc Read:        0.15/0.15  (README.md)
-     Script Read:     0.20/0.20  (code/step_2_plot_top1_top2.py)
-     Script Attempt:  0.00/0.45  (not attempted)
-     Run Success:     0.00/0.20  (✗ no successful run)
+   ✓ Methodology Score: 0.80/1.0
+      Doc Read:        0.15/0.15  (README.md)
+      Script Read:     0.20/0.20  (multiclass_state_analysis_testing.py)
+      Script Attempt:  0.45/0.45  (multiclass_state_analysis_testing.py)
+      Run Success:     0.00/0.20  (✗ no successful run)
 
 3️⃣  Computing task adherence (LLM judge)...
-   ✓ Adherence Score: 0.67/1.0
-
-💭 Judge Reasoning:
-   Core Process (28/50) – Understood the code but did not finish the required script.
-   Problem Solving (19/25) – Strong debugging: identified and fixed multiple issues.
-   Discovery (12/15) – Quickly located README and relevant files.
-   Technical (8/10) – Correct commands, minimal redundancy.
+   ✓ Adherence Score: 0.78/1.0
+   💭 Judge Reasoning:
+      Strengths: Located README and ran the correct script on first attempt.
+      Weaknesses: Failed to resolve dependency errors, did not try alternatives.
 ```
 
-Full execution traces are saved to: `logs/traces/corebench_trace_<date>_<run_id>.jsonl`
-
----
-
-
-## Repository Overview
-
-```
-agentbeats-corebench/
-├── scenarios/
-│   └── corebench/
-│       ├── scenario.toml
-│       ├── corebench_agent.py      # Purple agent
-│       ├── corebench_evaluator.py  # Green agent
-│       ├── mcp_server.py           
-│       ├── mdconvert.py            # Markdown conversion
-│       ├── planning_prompts.yaml   # ReAct planning prompts (from smolagents MultiStepAgent)
-│       ├── core_test.json.gpg      # Encrypted task definitions
-│       ├── capsule_extension.json.gpg 
-│       ├── metrics/                
-│       ├── capsules/               # Cached research capsules
-│       └── workspace/              # Purple agent execution sandbox
-├── src/agentbeats/
-│   ├── run_scenario.py             # CLI entrypoint (agentbeats-run)
-│   ├── client.py                   # A2A client
-│   ├── green_executor.py           
-│   ├── tool_provider.py            # MCP tool integration
-│   └── models.py                   
-├── logs/traces/
-├── sample.env
-└── pyproject.toml                  
-```
-
-### 🔒 Encrypted Test Set
-The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
+Full execution traces are saved as JSONL files to `logs/traces/<date>/<run_id>/` for debugging and observability.
 
 ---
 
@@ -238,6 +200,36 @@ The purple agent never communicates directly with the MCP server. Green acts as 
 
 ---
 
+## Repository Overview
+
+```
+agentbeats-corebench/
+├── scenarios/
+│   └── corebench/
+│       ├── scenario.toml
+│       ├── corebench_agent.py      # Purple agent
+│       ├── corebench_evaluator.py  # Green agent
+│       ├── mcp_server.py           
+│       ├── mdconvert.py            # Markdown conversion
+│       ├── planning_prompts.yaml   # ReAct planning prompts (from smolagents MultiStepAgent)
+│       ├── core_test.json.gpg      # Encrypted task definitions
+│       ├── capsule_extension.json.gpg 
+│       ├── metrics/                
+│       ├── capsules/               # Cached research capsules
+│       └── workspace/              # Purple agent execution sandbox
+├── src/agentbeats/
+│   ├── run_scenario.py             # CLI entrypoint (agentbeats-run)
+│   ├── client.py                   # A2A client
+│   ├── green_executor.py           
+│   ├── tool_provider.py            # MCP tool integration
+│   └── models.py                   
+├── logs/traces/
+├── sample.env
+└── pyproject.toml                  
+```
+
+---
+
 ## Troubleshooting
 
 | Issue                 | Solution                                                                                       |
@@ -245,6 +237,9 @@ The purple agent never communicates directly with the MCP server. Green acts as 
 | **Command timed out** | Increase `timeout` in `mcp_server.py` and `corebench_agent.py`.                                |
 | **Empty answers**     | Check MCP client timeout (600s in `corebench_evaluator.py`). Increase if Docker runs are slow. |
 | **0% accuracy**       | Check for scale mismatch (0.96 vs 96.12). Agent may be converting percentages incorrectly.     |
+
+### 🔒 Encrypted Test Set
+The task definitions (`core_test.json.gpg` and `capsule_extension.json.gpg`) are GPG-encrypted to prevent ground truth leakage. For local runs, the evaluator will provide decryption instructions if needed.
 
 ---
 
