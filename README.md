@@ -142,20 +142,20 @@ Per-task output shows detailed scoring breakdown:
 
 ```text
 1️⃣  Computing accuracy...
-   ✓ Accuracy: 0/1 (0%)
+    ✓ Accuracy: 0/1 (0%)
 
 2️⃣  Extracting methodology metrics...
-   ✓ Methodology Score: 0.80/1.0
+    ✓ Methodology Score: 0.80/1.0
       Doc Read:        0.15/0.15  (README.md)
       Script Read:     0.20/0.20  (multiclass_state_analysis_testing.py)
       Script Attempt:  0.45/0.45  (multiclass_state_analysis_testing.py)
       Run Success:     0.00/0.20  (✗ no successful run)
 
 3️⃣  Computing task adherence (LLM judge)...
-   ✓ Adherence Score: 0.78/1.0
-   💭 Judge Reasoning:
-      Strengths: Located README and ran the correct script on first attempt.
-      Weaknesses: Failed to resolve dependency errors, did not try alternatives.
+    ✓ Adherence Score: 0.78/1.0
+    💭 Judge Reasoning:
+      - Strengths: Located README and ran the correct script on first attempt.
+      - Weaknesses: Failed to resolve dependency errors, did not try alternatives.
 ```
 
 Full execution traces are saved as JSONL files to `logs/traces/<date>/<run_id>/` for debugging and observability.
